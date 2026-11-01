@@ -177,7 +177,7 @@ static size_t rcb(char *p, size_t s, size_t m, void *u) {
 static char *fetch(const char *url) {                /* 下载网段 / 域名列表；失败原因写入 ferr */
     Buf b = { 0 }; ferr[0] = 0;
     CURL *c = curl_easy_init(); if (!c) { snprintf(ferr, sizeof ferr, "curl 初始化失败"); return NULL; }
-    ca(c); curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, wcb);
+    ca(c); direct(c); curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, wcb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &b); curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
     CURLcode rc = curl_easy_perform(c); long st = 0;
@@ -406,12 +406,13 @@ static char *json_dup(const char *j, const char *key) {   /* 取字符串字段�
 /* ---------- 通知：Telegram / SMTP 邮件 ---------- */
 static int tg_send(const char *tk, const char *chat, const char *msg) {
     CURL *cu = curl_easy_init(); if (!cu) return -1;
+    ca(cu); direct(cu);
     char *e = curl_easy_escape(cu, msg, 0), *ch = curl_easy_escape(cu, chat, 0); int rc = -1;
     if (e && ch) {
         size_t L = strlen(e) + strlen(ch) + 32; char *b = malloc(L), url[300];
         if (b) {
             snprintf(b, L, "chat_id=%s&text=%s", ch, e); snprintf(url, sizeof url, "https://api.telegram.org/bot%s/sendMessage", tk);
-            ca(cu); curl_easy_setopt(cu, CURLOPT_URL, url); curl_easy_setopt(cu, CURLOPT_POSTFIELDS, b);
+            curl_easy_setopt(cu, CURLOPT_URL, url); curl_easy_setopt(cu, CURLOPT_POSTFIELDS, b);
             curl_easy_setopt(cu, CURLOPT_WRITEFUNCTION, nowrite); curl_easy_setopt(cu, CURLOPT_TIMEOUT, 20L);
             long st = 0; if (curl_easy_perform(cu) == CURLE_OK) curl_easy_getinfo(cu, CURLINFO_RESPONSE_CODE, &st);
             rc = (st >= 200 && st < 300) ? 0 : -1; free(b);
@@ -437,7 +438,7 @@ static int send_mail(const char *host, int port, const char *user, const char *p
                               "Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n%s", date, user, toh, sb, bb);
             Src src = { pl, strlen(pl), 0 }; CURL *c = curl_easy_init();
             if (c) {
-                ca(c); snprintf(url, sizeof url, "%s://%s:%d", port == 465 ? "smtps" : "smtp", host, port); snprintf(from, sizeof from, "<%s>", user);
+                ca(c); direct(c); snprintf(url, sizeof url, "%s://%s:%d", port == 465 ? "smtps" : "smtp", host, port); snprintf(from, sizeof from, "<%s>", user);
                 curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_USERNAME, user); curl_easy_setopt(c, CURLOPT_PASSWORD, pass);
                 curl_easy_setopt(c, CURLOPT_MAIL_FROM, from); curl_easy_setopt(c, CURLOPT_MAIL_RCPT, rcpt);
                 curl_easy_setopt(c, CURLOPT_READFUNCTION, rcb); curl_easy_setopt(c, CURLOPT_READDATA, &src); curl_easy_setopt(c, CURLOPT_UPLOAD, 1L);
@@ -519,7 +520,7 @@ static void addlink(const char *a, const char *b, const char *c) {
 /* ---------- GitHub：REST API（不依赖 git，安卓也可用） ---------- */
 static long ghreq(const char *method, const char *url, const char *tk, const char *body, char **out) {
     Buf b = { 0 }; CURL *c = curl_easy_init(); if (!c) return 0;
-    ca(c); struct curl_slist *h = NULL; char t[300];
+    ca(c); direct(c); struct curl_slist *h = NULL; char t[300];
     snprintf(t, sizeof t, "Authorization: Bearer %s", tk); h = curl_slist_append(h, t);
     h = curl_slist_append(h, "Accept: application/vnd.github+json"); h = curl_slist_append(h, "X-GitHub-Api-Version: 2022-11-28");
     if (body) h = curl_slist_append(h, "Content-Type: application/json");
@@ -575,7 +576,7 @@ static int upload_github(const char *c, Item *good, int ng, double ml, int mn, i
 /* ---------- SFTP：libcurl（需带 libssh2；安卓版暂不支持） ---------- */
 static CURL *sftp_open(const char *url, const char *user, const char *pw) {
     CURL *c = curl_easy_init(); if (!c) return NULL;
-    ca(c); curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_USERNAME, user);
+    ca(c); direct(c); curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_USERNAME, user);
     curl_easy_setopt(c, CURLOPT_PASSWORD, pw); curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
     return c;
 }
@@ -676,7 +677,7 @@ static void run_job(const char *c, Item *cand, char *buf) {
         setphase("下载测速中"); prog(k);
         for (int i = 0; i < k; i++) { cand[i].mbps = speed_test(&cand[i]); pthread_mutex_lock(&mu); done++; pthread_mutex_unlock(&mu); }
         int q = 0; for (int i = 0; i < k; i++) if (cand[i].mbps >= dl_min) cand[q++] = cand[i];
-        g = q; qsort(cand, (size_t)g, sizeof *cand, cmp_speed);
+        g = q; qsort(cand, (size_t)g, sizeof(Item), cmp_speed);
     }
     if (g > want) g = want;
 
@@ -698,7 +699,7 @@ static void run_job(const char *c, Item *cand, char *buf) {
 static void *job(void *arg) {
     char *c = arg; Item *cand = calloc(MAXIP, sizeof *cand); char *buf = malloc(REQ_MAX);
     if (cand && buf) run_job(c, cand, buf); else setphase("内存不足");
-    char msg[2600]; summary(msg, sizeof msg); notify(c, msg);   /* 每次筛选 + 上传结束后通知 */
+    char msg[8192]; summary(msg, sizeof msg); notify(c, msg);   /* 每次筛选 + 上传结束后通知 */
     free(cand); free(buf); free(c);
     pthread_mutex_lock(&mu); running = 0; pthread_mutex_unlock(&mu);
     return NULL;
