@@ -40,13 +40,18 @@ data/                   运行后生成：config.txt、secrets.txt（权限 600�
 **Debian / Ubuntu 一键安装**（把仓库推到你的 GitHub 后）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<你的用户名>/cf-ip-optimizer/main/install.sh | CFIP_REPO=https://github.com/<你的用户名>/cf-ip-optimizer.git bash
+curl -fsSL https://raw.githubusercontent.com/gansweet/cf-ip-optimizer-upload/main/install.sh | CFIP_REPO=https://github.com/gansweet/cf-ip-optimizer-upload.git bash
 ```
 
 脚本会安装依赖、编译、创建桌面图标、加入开机自启并打开页面。
 
 **手动编译**：
-
+- dowload the file
+```
+git clone https://github.com/gansweet/cf-ip-optimizer-upload.git
+cd cf-ip-optimizer-upload
+```
+- then build and run
 ```bash
 sudo apt update && sudo apt install -y build-essential pkg-config libcurl4-openssl-dev
 cc -O2 -Wall -o cfip cf_ip_test_tls.c $(pkg-config --cflags --libs libcurl) -lpthread
@@ -55,14 +60,24 @@ cc -O2 -Wall -o cfip cf_ip_test_tls.c $(pkg-config --cflags --libs libcurl) -lpt
 ```
 
 **Docker**：
-
+- dowload the file
+```
+git clone https://github.com/gansweet/cf-ip-optimizer-upload.git
+cd cf-ip-optimizer-upload
+```
+- then build and run
 ```bash
 docker build -t cfip .
 docker run -d --name cfip -p 127.0.0.1:18443:18443 -v $PWD/data:/app/data cfip
 ```
 
 **Termux（安卓命令行）**：
-
+- dowload the file
+```
+git clone https://github.com/gansweet/cf-ip-optimizer-upload.git
+cd cf-ip-optimizer-upload
+```
+- then build and run
 ```bash
 pkg update && pkg install -y clang pkg-config libcurl git
 clang -O2 -o cfip cf_ip_test_tls.c $(pkg-config --cflags --libs libcurl)
