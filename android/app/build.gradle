@@ -1,0 +1,26 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.amos.cfip'
+    compileSdk 34
+    ndkVersion '26.1.10909125'
+    defaultConfig {
+        applicationId 'com.amos.cfip'
+        minSdk 26
+        targetSdk 34
+        versionCode 3
+        versionName '3.0'
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64' }
+    }
+    buildFeatures { prefab true }
+    externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }
+    // 前端页面直接取自项目根目录的 web/，与桌面版是同一份 index.html
+    sourceSets { main { assets.srcDirs = ['src/main/assets', '../../web'] } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+
+dependencies {
+    // Google 提供的 NDK 预编译包（Prefab）：libcurl + OpenSSL
+    implementation 'com.android.ndk.thirdparty:curl:7.79.1-beta-1'
+    implementation 'com.android.ndk.thirdparty:openssl:1.1.1l-beta-1'
+}

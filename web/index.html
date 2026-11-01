@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-t="night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Amos · CF 优选</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c8cff'/%3E%3Cstop offset='1' stop-color='%23ff7ad9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='11' fill='%23101528'/%3E%3Ccircle cx='24' cy='24' r='20' fill='none' stroke='url(%23g)' stroke-width='1.8'/%3E%3Cpath d='M13 35 24 11 35 35M17.5 27h13' fill='none' stroke='url(%23g)' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='24' cy='11' r='3' fill='%23ff7ad9'/%3E%3C/svg%3E">
+<style>
+:root{--bg:#0b1020;--bg2:#1a1740;--card:#121832cc;--ink:#e8ecff;--mute:#8d96c4;--line:#2a3366;--a1:#7c8cff;--a2:#ff7ad9;--ok:#5be3a8;--warn:#ffb454}
+[data-t=rose]{--bg:#2a0d17;--bg2:#4a1424;--card:#3a1220cc;--ink:#ffe9ee;--mute:#d49aa8;--line:#6b2b3d;--a1:#ff5d7d;--a2:#ffb36b}
+[data-t=forest]{--bg:#0e1f17;--bg2:#17402b;--card:#12291dcc;--ink:#e6f6ea;--mute:#8fb59d;--line:#2a5a40;--a1:#4fd68a;--a2:#d6e35b}
+[data-t=ocean]{--bg:#06182c;--bg2:#0a3a5e;--card:#0a2540cc;--ink:#e4f3ff;--mute:#86b2d3;--line:#1f4f7a;--a1:#3aa8ff;--a2:#38e1d0}
+[data-t=florence]{--bg:#e9efe6;--bg2:#cfe3dc;--card:#f7faf5dd;--ink:#1d3a36;--mute:#62807a;--line:#b6cdc5;--a1:#1f8f86;--a2:#c9945a;--ok:#1f8f5a;--warn:#b8650a}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;min-height:100vh;color:var(--ink);font:15px/1.6 "Avenir Next","PingFang SC","Microsoft YaHei",system-ui,sans-serif;background:radial-gradient(1200px 600px at 80% -10%,var(--bg2),transparent),var(--bg);transition:background .4s,color .4s}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--card);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+#logo{width:46px;height:46px;padding:0;border:0;background:none;cursor:pointer}
+#logo svg{width:100%;height:100%;overflow:visible}
+.orb{transform-origin:24px 24px;animation:spin 14s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{margin:0;font-size:20px;letter-spacing:.5px}
+header small{color:var(--mute);display:block;font-size:12px;line-height:1.2}
+header .sp{flex:1}
+main{max-width:940px;margin:0 auto;padding:18px;display:grid;gap:16px}
+section{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:16px 20px;backdrop-filter:blur(10px)}
+h2{margin:0 0 10px;font-size:17px;display:flex;align-items:center;gap:10px}
+.ic{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:18px;background:linear-gradient(135deg,var(--a1),var(--a2))}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+label{color:var(--mute);font-size:13px;display:flex;flex-direction:column;gap:3px;flex:1;min-width:120px}
+label.c{flex-direction:row;align-items:center;gap:6px;color:var(--ink);flex:none}
+input,textarea,select{width:100%;background:#0000002e;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:7px 10px;font:inherit}
+[data-t=florence] input,[data-t=florence] textarea,[data-t=florence] select{background:#fff8}
+select option{color:#111}
+input[type=checkbox]{width:auto}
+input[readonly],textarea[readonly]{opacity:.7}
+textarea{min-height:84px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;resize:vertical}
+.row>textarea{flex-basis:100%}
+button{font:inherit;color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:10px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--a1)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--a1);outline-offset:1px}
+#go{background:linear-gradient(135deg,var(--a1),var(--a2));border:0;color:#fff;font-weight:700;padding:10px 22px;border-radius:14px;box-shadow:0 6px 22px #0004}
+#go:disabled{opacity:.5;cursor:wait}
+.hint{color:var(--mute);font-size:12px;margin:4px 0}
+.warn{color:var(--warn);font-size:13px;margin:6px 0}
+.bar{height:10px;border-radius:9px;background:#0003;overflow:hidden;margin:10px 0}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--a1),var(--a2));transition:width .4s}
+.run .bar i{background-size:200% 100%;animation:sh 1.2s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td.ms{color:var(--ok);font-variant-numeric:tabular-nums}
+pre{white-space:pre-wrap;word-break:break-all;margin:6px 0;font-size:13px}
+details{margin:8px 0}summary{cursor:pointer;color:var(--mute)}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:90vw;background:var(--a1);color:#fff;padding:8px 16px;border-radius:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
+#toast.on{opacity:1}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <button id="logo" title="点击切换皮肤" aria-label="切换皮肤">
+    <svg viewBox="0 0 48 48"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--a1)"/><stop offset="1" stop-color="var(--a2)"/></linearGradient></defs>
+      <circle class="orb" cx="24" cy="24" r="21" fill="none" stroke="url(#g)" stroke-width="2" stroke-dasharray="6 5"/>
+      <path d="M13 35 24 11 35 35M17.5 27h13" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="24" cy="11" r="3" fill="url(#g)"/></svg>
+  </button>
+  <div><h1>Amos · CF 优选</h1><small>皮肤：<span id="tn"></span></small></div>
+  <span class="sp"></span>
+  <button id="go">🚀 开始</button>
+</header>
+
+<main>
+<section id="z1"><h2><span class="ic">🎯</span>优选区</h2>
+  <div class="row"><label class="c"><input type="checkbox" id="v4" checked>IPv4</label><label class="c"><input type="checkbox" id="v6">IPv6</label><label class="c"><input type="checkbox" id="vd">🌐 域名优选</label>
+    <span class="hint">可单选或多选，默认 IPv4</span></div>
+  <div id="panes"></div>
+  <div class="row">
+    <label>优选个数<input id="count" type="number" value="10" min="1" max="500"></label>
+    <label>模式<input value="TCP + TLS" readonly></label>
+    <label>端口<select id="port"><option>443</option><option>2053</option><option>2083</option><option>2087</option><option>2096</option><option>8443</option></select></label>
+    <label>延迟下限 ms<input id="minms" type="number" value="0"></label>
+    <label>延迟上限 ms<input id="maxms" type="number" value="9999"></label>
+    <label>最大丢包(0~1)<input id="loss" value="1.00"></label>
+  </div>
+  <div class="row"><label class="c"><input type="checkbox" id="dl_on">⬇️ 下载测速</label>
+    <label>最低速度 MB/s<input id="dl_min" value="0"></label><label>单个测速秒数<input id="dl_secs" type="number" value="6" min="2" max="30"></label>
+    <label>测速文件地址<input id="dl_url" value="https://speed.cloudflare.com/__down?bytes=50000000"></label></div>
+  <p class="hint">端口非 443 时，测试与输出都带端口，如 6.6.6.6:2053#JP（IPv6 写作 [2606:4700::1]:2053#JP）；443 不写端口。下载测速只测延迟最低的一批（最多 60 个），按速度从高到低排序，开启后耗时更长。</p>
+</section>
+
+<section id="z2"><h2><span class="ic">🔗</span>节点区</h2>
+  <label>SNI 域名（一行一个，从中轮换做真实 TLS 测试；IP 模式留空使用 speed.cloudflare.com，域名模式留空使用域名本身）<textarea id="sni" placeholder="your-domain.example"></textarea></label>
+  <div class="row">
+    <label>随机抽取网段数（0=全部）<input id="nseg" type="number" value="10" min="0" max="500"></label>
+    <label>每网段随机 IP 数<input id="samples" type="number" value="3" min="1" max="20"></label>
+    <label>随机抽取域名数（0=全部）<input id="ndom" type="number" value="20" min="0" max="500"></label>
+    <label>每个测试次数<input id="tries" type="number" value="3" min="1" max="10"></label>
+    <label>连接超时 ms<input id="timeout" type="number" value="3000"></label>
+    <label>并发线程<input id="threads" type="number" value="16" min="1" max="64"></label>
+  </div>
+  <p class="hint">网段很多时，先随机选出若干网段，再由程序在每个网段内随机生成 IP 测试。TLS 证书与域名验证始终开启，只统计真正握手成功的结果。</p>
+</section>
+
+<section id="z3"><h2><span class="ic">☁️</span>上传区</h2>
+  <div class="hint"><b>GitHub</b>（通过 GitHub API 写入，无需安装 git）</div>
+  <div class="row">
+    <label>GitHub 用户名<input id="gh_user" autocomplete="off"></label>
+    <label>仓库名<input id="gh_repo" autocomplete="off"></label>
+    <label>PAT（保存后不再显示）<input id="gh_token" type="password" autocomplete="new-password"></label>
+  </div>
+  <p class="hint">没有仓库？登录 GitHub → New repository → 建一个仓库；再到 Settings → Developer settings → Fine-grained tokens，只授权该仓库的 Contents 读写权限。</p>
+  <div id="files"></div>
+  <div class="row"><button id="addf">＋ 添加文件</button>
+    <span class="hint">文件名 · 后缀 · 写入个数（0=全部；少于总数时按文件轮询分配）。后缀以 # 开头，# 后可用英文、中文、emoji 等，如 #SG、#优选域名、#JP_域名、#🇸🇬。每次上传前会先读取原文件并复测其中的 IP / 域名，剔除失效项后与新结果合并，文件名和路径不变。</span></div>
+
+  <div class="hint" style="margin-top:16px"><b>SFTP</b>（服务器已装好网站或 WordPress 即可；路径填服务器上的真实绝对路径）</div>
+  <div class="row">
+    <label>服务器地址或域名<input id="sf_host" placeholder="example.com 或 example.com:22"></label>
+    <label>用户名<input id="sf_user" autocomplete="off"></label>
+    <label>登录密码<input id="sf_pass" type="password" autocomplete="new-password"></label>
+  </div>
+  <div class="row">
+    <label>服务器文件路径<input id="sf_dir" placeholder="/var/www/html/data"></label>
+    <label>对应的 https 下载前缀<input id="sf_base" placeholder="https://domain.com/data/"></label>
+  </div>
+  <div id="sf_files_box"></div>
+  <div class="row"><button id="addsf">＋ 添加 SFTP 文件</button><span class="hint">下载地址形如 https://domain.com/data/ipchosen.txt 或 https://domain.com/wp-content/uploads/2026/01/ipchosen.txt，前缀须与上面的服务器路径对应。SFTP 首次连接不校验服务器主机密钥，请只连自己的服务器；安卓版暂不支持 SFTP。</span></div>
+</section>
+
+<section id="z5"><h2><span class="ic">⏰</span>自动运行</h2>
+  <div class="row">
+    <label>方式<select id="sch_mode"><option value="off">关闭</option><option value="hours">每隔固定时长</option><option value="weekly">每周固定时间</option></select></label>
+    <label>间隔<select id="sch_hours"><option value="12">12 小时</option><option value="24" selected>24 小时</option><option value="48">48 小时（2 天）</option><option value="72">72 小时（3 天）</option><option value="168">7 天</option></select></label>
+    <label>每周<select id="sch_wd"><option value="0">周日</option><option value="1" selected>周一</option><option value="2">周二</option><option value="3">周三</option><option value="4">周四</option><option value="5">周五</option><option value="6">周六</option></select></label>
+    <label>时间<input id="sch_time" type="time" value="02:00"></label>
+  </div>
+  <div class="row"><button id="savecfg">💾 保存设置</button><button id="auto">⚙️ 设为开机自启</button>
+    <span class="hint">保存后程序运行期间按设定自动筛选并上传，完成后发送通知。请先填好优选 / 节点 / 上传信息再保存；间隔从保存时刻开始计时。自动运行时同样会提示代理风险。</span></div>
+</section>
+
+<section id="z4"><h2><span class="ic">📊</span>结果区</h2>
+  <div id="stat"><div id="ph">空闲</div><div class="bar"><i id="pb"></i></div></div>
+  <div class="warn" id="note" hidden></div>
+  <div class="tw"><table><thead><tr><th>#</th><th>地址</th><th>TLS 延迟</th><th>下载速度</th><th>丢包</th></tr></thead><tbody id="tb"></tbody></table></div>
+  <p class="hint" id="empty">点击右上角“开始”。请先关闭代理 / VPN，保持直连网络。</p>
+  <pre id="lk"></pre>
+  <details><summary>🔔 Telegram 通知（填写 Token 和 Chat ID 后自动启用）</summary>
+    <div class="row"><label>Bot Token<input id="tg_token" type="password" autocomplete="new-password"></label><label>Chat ID<input id="tg_chat"></label></div></details>
+  <details><summary>✉️ 邮件通知（SMTP，五项填全后自动启用）</summary>
+    <div class="row"><label>SMTP 服务器<input id="mail_host" placeholder="smtp.163.com"></label><label>端口（465 为 SSL）<input id="mail_port" type="number" value="465"></label>
+    <label>邮箱账号<input id="mail_user" placeholder="your_account@163.com"></label><label>授权码 / 密码<input id="mail_pass" type="password" autocomplete="new-password"></label>
+    <label>收件邮箱（多个用逗号分隔）<input id="mail_to" placeholder="target@example.com"></label></div>
+    <p class="hint">163 等邮箱需要在邮箱设置里开启 SMTP，并使用 16 位授权码，而不是登录密码。</p></details>
+  <div class="row"><button id="tnote">📨 保存并发送测试通知</button><span class="hint">每次筛选和上传结束后推送状态、前 10 个优选结果和下载链接。</span></div>
+  <div class="row"><button data-x="csv">⬇️ 导出 CSV</button><button data-x="txt">⬇️ 导出 TXT</button></div>
+</section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const OFF={4:'https://www.cloudflare.com/ips-v4',6:'https://www.cloudflare.com/ips-v6',d:''};
+const DEF={4:'173.245.48.0/20\n103.21.244.0/22\n103.22.200.0/22\n103.31.4.0/22\n141.101.64.0/18\n108.162.192.0/18\n190.93.240.0/20\n188.114.96.0/20\n197.234.240.0/22\n198.41.128.0/17\n162.158.0.0/15\n104.16.0.0/13\n104.24.0.0/14\n172.64.0.0/13\n131.0.72.0/22',
+ 6:'2400:cb00::/32\n2606:4700::/32\n2803:f800::/32\n2405:b500::/32\n2405:8100::/32\n2a06:98c0::/29\n2c0f:f248::/32'};
+const LAB={4:'IPv4 官方网段地址',6:'IPv6 官方网段地址',d:'域名列表地址（自填 URL；也可直接在下方手动编辑，每行一个域名，# 后为备注）'};
+const TX={4:'cidr4',6:'cidr6',d:'doms'},CK={4:'v4',6:'v6',d:'vd'};
+const TH=[['night','星空黑'],['rose','玫瑰红'],['forest','山野绿'],['ocean','海洋蓝'],['florence','翡冷翠']];
+let ti=+localStorage.getItem('cfip-t')||0;
+const theme=()=>{document.documentElement.dataset.t=TH[ti][0];$('tn').textContent=TH[ti][1];localStorage.setItem('cfip-t',ti)};
+$('logo').onclick=()=>{ti=(ti+1)%TH.length;theme()};theme();
+const toast=m=>{const t=$('toast');t.textContent=m;t.className='on';clearTimeout(toast.t);toast.t=setTimeout(()=>t.className='',3200)};
+const post=(u,b)=>fetch(u,{method:'POST',body:b});
+
+for(const k of ['4','6','d'])$('panes').insertAdjacentHTML('beforeend',`<div class="row" id="pane${k}" ${k=='4'?'':'hidden'}><label>${LAB[k]}<input id="url${k}" value="${OFF[k]}" readonly placeholder="https://example.com/domains.txt"></label>
+ <button data-a="edit" data-k="${k}">✏️ 编辑</button><button data-a="save" data-k="${k}">💾 保存</button><button data-a="reset" data-k="${k}">↩️ 恢复</button><button data-a="pull" data-k="${k}">🔄 拉取</button>
+ <textarea id="${TX[k]}" readonly placeholder="${k=='d'?'一行一个域名，例如 cf.example.com':'网段将显示在这里，编辑后点保存即可作为抽样范围'}"></textarea></div>`);
+const showPanes=()=>['4','6','d'].forEach(k=>$('pane'+k).hidden=!$(CK[k]).checked);
+['4','6','d'].forEach(k=>$(CK[k]).onchange=showPanes);
+
+async function pull(k){const u=$('url'+k),t=$(TX[k]);
+  if(!u.value.trim()){if(k=='d')toast('请先填写域名列表地址，或直接手动编辑');return}
+  let msg='';
+  try{const r=await fetch('/api/ips?url='+encodeURIComponent(u.value.trim()));const x=await r.text();if(!r.ok){msg=x;throw 0}
+    t.value=x.trim();u.dataset.last=u.value;toast('已更新：'+LAB[k].split('（')[0]);return}catch{}
+  if(k!='d'&&!t.value)t.value=DEF[k];u.dataset.last=u.value;
+  toast((msg||'拉取失败：请检查地址或网络')+(k!='d'?'；已填入内置官方网段，可手动修改':''))}
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-a]');if(!b)return;const k=b.dataset.k,u=$('url'+k),t=$(TX[k]);
+  if(b.dataset.a=='edit'){u.readOnly=t.readOnly=false;u.focus()}
+  if(b.dataset.a=='save'){u.readOnly=t.readOnly=true;if(u.value!==u.dataset.last)await pull(k);await post('/api/save',collect());toast('已保存')}
+  if(b.dataset.a=='reset'){u.value=OFF[k];u.readOnly=t.readOnly=true;if(k=='d'){u.dataset.last='';toast('已清空地址')}else await pull(k)}
+  if(b.dataset.a=='pull')await pull(k)});
+
+function addRow(box,n='',s='',c=0){const d=document.createElement('div');d.className='row frow';
+  d.innerHTML='<label>文件名<input class="fn" placeholder="ipchosen.txt"></label><label>后缀<input class="fs" placeholder="#SG 或 #优选域名"></label><label>个数<input class="fc" type="number" min="0"></label><button>✖</button>';
+  d.querySelector('.fn').value=n;d.querySelector('.fs').value=s;d.querySelector('.fc').value=c;
+  d.querySelector('button').onclick=()=>d.remove();$(box).append(d)}
+$('addf').onclick=()=>addRow('files');$('addsf').onclick=()=>addRow('sf_files_box');
+
+const IDS=['count','port','minms','maxms','loss','dl_min','dl_secs','dl_url','sni','nseg','ndom','samples','tries','timeout','threads','url4','url6','urld','cidr4','cidr6','doms',
+ 'gh_user','gh_repo','sf_host','sf_user','sf_dir','sf_base','sch_mode','sch_hours','sch_wd','sch_time','tg_chat','mail_host','mail_port','mail_user','mail_to'],
+ SEC=['gh_token','sf_pass','tg_token','mail_pass'],CHK=['v4','v6','vd','dl_on'];
+const rows=b=>[...$(b).querySelectorAll('.frow')].map(r=>{const n=r.querySelector('.fn').value.trim();return n?`${n}|${r.querySelector('.fs').value.trim()}|${r.querySelector('.fc').value||0}`:''}).filter(Boolean).join('\n');
+function collect(){const p=new URLSearchParams();IDS.concat(SEC).forEach(i=>p.set(i,$(i).value));CHK.forEach(i=>p.set(i,$(i).checked?1:0));
+  p.set('gh_files',rows('files'));p.set('sf_files',rows('sf_files_box'));return p.toString()}
+const clr=()=>SEC.forEach(k=>{if($(k).value){$(k).value='';$(k).placeholder='已保存（留空沿用）'}});
+
+async function load(){try{const p=new URLSearchParams(await (await fetch('/api/config')).text());
+  IDS.forEach(i=>{if(p.get(i)!==null&&p.get(i)!=='')$(i).value=p.get(i)});
+  CHK.forEach(i=>{if(p.get(i)!==null)$(i).checked=p.get(i)=='1'});
+  SEC.forEach(k=>{if(p.get('has_'+k)=='1')$(k).placeholder='已保存（留空沿用）'});
+  [['gh_files','files'],['sf_files','sf_files_box']].forEach(([k,b])=>(p.get(k)||'').split('\n').filter(Boolean).forEach(l=>{const[a,s,c]=l.split('|');addRow(b,a,s||'',c||0)}))}catch{}
+  if(!$('files').children.length)addRow('files','ipchosen.txt','',0);
+  showPanes();
+  for(const k of ['4','6']){$('url'+k).dataset.last=$('url'+k).value;if(!$(TX[k]).value)await pull(k)}}
+
+let timer;
+async function poll(){clearTimeout(timer);let s;try{s=await (await fetch('/api/status')).json()}catch{timer=setTimeout(poll,1500);return}
+  $('ph').textContent=s.phase+(s.total&&s.running?` · ${s.done}/${s.total}`:'');
+  $('pb').style.width=(s.running&&s.total?Math.round(100*s.done/s.total):s.items.length?100:0)+'%';
+  $('stat').className=s.running?'run':'';$('go').disabled=!!s.running;
+  $('note').hidden=!s.note;$('note').textContent=s.note?`⚠️ 疑似开启了代理 / VPN：${s.note}。在代理下得到的结果可能有误。`:'';
+  const tb=$('tb');tb.textContent='';
+  s.items.forEach((x,i)=>{const tr=document.createElement('tr');
+    [i+1,x.ip,x.ms+' ms',x.mbps>0?x.mbps+' MB/s':'—',(x.loss*100).toFixed(0)+'%'].forEach((v,j)=>{const td=document.createElement('td');td.textContent=v;if(j==2)td.className='ms';tr.append(td)});tb.append(tr)});
+  $('empty').hidden=s.items.length>0;
+  $('lk').textContent=s.links?'下载链接：\n'+s.links:'';
+  if(s.running)timer=setTimeout(poll,700)}
+
+$('go').onclick=async()=>{
+  if(!$('v4').checked&&!$('v6').checked&&!$('vd').checked)return toast('请至少选择 IPv4、IPv6 或 域名优选');
+  let px={sus:0};try{px=await (await fetch('/api/proxy')).json()}catch{}
+  const noUp=!(($('gh_user').value&&$('gh_repo').value)||$('sf_host').value);
+  const msg=px.sus?`检测到可能开启了代理 / VPN：${px.why}。\n\n在代理下筛选，测到的是代理出口而不是你的直连线路，结果可能有误，甚至没有结果。建议先关闭代理再筛选。\n\n仍要继续吗？（继续的话，结果和通知里会标注“结果可能有误”）`:'请先关闭代理 / VPN，保持直连网络，才能得到有效的优选结果。';
+  if(!confirm(msg+(noUp?'\n\n未填写完整的上传信息：只筛选，不上传。':'')))return;
+  const r=await post('/api/start',collect());
+  if(r.status==409)toast('已有任务在运行');clr();poll()};
+$('savecfg').onclick=async()=>{await post('/api/save',collect());clr();toast('设置已保存')};
+$('auto').onclick=async()=>{await post('/api/save',collect());clr();toast(await (await post('/api/autostart','')).text())};
+$('tnote').onclick=async()=>{await post('/api/save',collect());clr();toast(await (await post('/api/test','')).text())};
+document.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{location.href='/api/export?fmt='+b.dataset.x});
+
+load().then(poll);
+</script>
+</body>
+</html>

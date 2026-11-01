@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Amos · CF 优选
+Comment=Cloudflare IP / 域名优选（启动后自动打开页面）
+Exec=/opt/cfip/cfip
+Icon=cfip
+Terminal=false
+Categories=Network;Utility;
