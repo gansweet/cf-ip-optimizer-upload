@@ -33,13 +33,22 @@ jobs:
       - name: Build
         run: |
           mkdir -p build dist
-          if [ "$RUNNER_OS" = macOS ]; then LIBS="-lcurl"; else LIBS="$(pkg-config --cflags --libs libcurl)"; fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            LIBS="-lcurl";
+          elif [ "$RUNNER_OS" = Windows ]; then
+            LIBS="$(pkg-config --cflags --libs libcurl)";
+          else
+            LIBS="$(pkg-config --cflags --libs libcurl)";
+          fi
+
           OBJ=""
           if [ "$RUNNER_OS" = Windows ]; then
             echo '1 ICON "assets/cfip.ico"' > build/cfip.rc
             windres build/cfip.rc -O coff -o build/cfip_res.o
             OBJ=build/cfip_res.o
           fi
+
+          echo "Building with LIBS: $LIBS"
           cc -O2 -Wall -Wextra -o build/cfip cf_ip_test_tls.c $OBJ $LIBS -lpthread
       - name: Package (Linux)
         if: matrix.name == 'linux'
@@ -63,8 +72,18 @@ jobs:
         if: matrix.name == 'windows'
         run: |
           D=dist/cfip; mkdir -p $D
-          cp build/cfip.exe $D/
-          ldd build/cfip.exe | awk '/\/usr\/bin/ {print $3}' | xargs -I{} cp {} $D/
+          # 兼容 Windows 可执行后缀
+          if [ -f build/cfip.exe ]; then
+            cp build/cfip.exe $D/
+          else
+            cp build/cfip $D/cfip.exe
+          fi
+
+          # 自动复制依赖的 DLL，若 ldd 失败则使用 copr/which 兜底或安全跳过
+          if command -v ldd &> /dev/null; then
+            ldd $D/cfip.exe | awk '/\/usr\/bin/ {print $3}' | xargs -I{} cp {} $D/ || true
+          fi
+
           cp -r web assets $D/
           printf '@echo off\r\ncd /d "%%~dp0"\r\ncfip.exe\r\n' > $D/Start-CFIP.bat
           (cd dist && zip -qr ../cfip-windows.zip cfip)
