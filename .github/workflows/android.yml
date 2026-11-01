@@ -36,19 +36,23 @@ jobs:
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
 
-      # 自动接受许可证，并安装构建所需的平台工具、CMake 及 NDK
       - name: Accept Android SDK Licenses & Install Tools
         run: |
           export PATH="$HOME/android-sdk/cmdline-tools/latest/bin:$PATH"
           yes | sdkmanager --licenses || true
           sdkmanager --install "platform-tools" "build-tools;34.0.0" "platforms;android-34" "cmake;3.22.1" "ndk;25.1.8937393" || true
 
+      # 关键修复：生成 local.properties 供 Gradle 正确识别 SDK 和 NDK 路径
+      - name: Generate local.properties
+        run: |
+          echo "sdk.dir=$HOME/android-sdk" > android/local.properties
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
       - name: Build APK
-        run: gradle -p android assembleDebug --no-daemon
+        run: gradle -p android assembleDebug --stacktrace --info --no-daemon
 
       - name: Collect
         run: cp android/app/build/outputs/apk/debug/app-debug.apk cfip-android.apk
