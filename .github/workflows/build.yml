@@ -29,16 +29,16 @@ jobs:
         if: matrix.name == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev pkg-config
 
-      - name: Install deps (Windows / MSYS2 MINGW64)
+      - name: Install deps (Windows / MSYS2 UCRT64)
         if: matrix.name == 'windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: >-
-            mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-libcurl
-            mingw-w64-x86_64-zstd
+            mingw-w64-ucrt64-toolchain
+            mingw-w64-ucrt64-curl
+            mingw-w64-ucrt64-zstd
             zip
 
       - name: Build
