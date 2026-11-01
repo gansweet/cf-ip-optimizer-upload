@@ -76,13 +76,29 @@ docker run -d --name cfip -p 127.0.0.1:18443:18443 -v $PWD/data:/app/data cfip
 ```
 git clone https://github.com/gansweet/cf-ip-optimizer-upload.git
 cd cf-ip-optimizer-upload
-```
+		```
 - then build and run
 ```bash
 pkg update && pkg install -y clang pkg-config libcurl git
 clang -O2 -o cfip cf_ip_test_tls.c $(pkg-config --cflags --libs libcurl)
 ./cfip                       # 用 termux-open-url 打开页面，也可手动访问 http://127.0.0.1:18443
 ```
+**iSH isntallation on ipad or iphone
+- dowload the file
+```
+git clone https://github.com/gansweet/cf-ip-optimizer-upload.git
+cd cf-ip-optimizer-upload
+```
+- then build and run
+```
+apk update
+apk add build-base pkgconf curl-dev
+
+cc -O2 -Wall -o cfip cf_ip_test_tls.c $(pkg-config --cflags --libs libcurl) -lpthread
+
+./cfip
+```
+
 
 **安卓 App**：`android/` 是独立的 Gradle 工程。C 内核编译成 `libcfip.so`，由前台服务在后台运行，WebView 显示同一份前端；定时任务靠前台服务保活。
 
