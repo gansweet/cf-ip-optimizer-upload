@@ -52,6 +52,13 @@ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-
 td.ms{color:var(--ok);font-variant-numeric:tabular-nums}
 pre{white-space:pre-wrap;word-break:break-all;margin:6px 0;font-size:13px}
 details{margin:8px 0}summary{cursor:pointer;color:var(--mute)}
+#viewer{position:fixed;inset:0;z-index:20;background:#000a;display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:4vh 12px}
+.vbox{background:var(--bg);border:1px solid var(--line);border-radius:18px;max-width:860px;width:100%;padding:16px 18px}
+.vh{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.vh .sp{flex:1}
+.vcard{border:1px solid var(--line);border-radius:14px;padding:10px 12px;margin:10px 0}
+.vcard .row{margin:4px 0}.vcard textarea{min-height:150px}
+.badge{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--a1);color:var(--a1)}
+.badge.warn{border-color:var(--warn);color:var(--warn)}
 #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:90vw;background:var(--a1);color:#fff;padding:8px 16px;border-radius:12px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9}
 #toast.on{opacity:1}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -107,9 +114,10 @@ details{margin:8px 0}summary{cursor:pointer;color:var(--mute)}
   <div class="row">
     <label>GitHub 用户名<input id="gh_user" autocomplete="off"></label>
     <label>仓库名<input id="gh_repo" autocomplete="off"></label>
-    <label>PAT（保存后不再显示）<input id="gh_token" type="password" autocomplete="new-password"></label>
+    <label>PAT（API 用，保存后不再显示）<input id="gh_token" type="password" autocomplete="new-password"></label>
+    <label>git 用 PAT（API 失败时备用；留空则复用左边的 PAT）<input id="gh_git_token" type="password" autocomplete="new-password"></label>
   </div>
-  <p class="hint">没有仓库？登录 GitHub → New repository → 建一个仓库；再到 Settings → Developer settings → Fine-grained tokens，只授权该仓库的 Contents 读写权限。</p>
+  <p class="hint">没有仓库？登录 GitHub → New repository → 建一个仓库；再到 Settings → Developer settings → Fine-grained tokens，只授权该仓库的 Contents 读写权限。API 读写失败时会自动改用 git（需要本机已安装 git）克隆、提交并推送。</p>
   <div id="files"></div>
   <div class="row"><button id="addf">＋ 添加文件</button>
     <span class="hint">文件名 · 后缀 · 写入个数（0=全部；少于总数时按文件轮询分配）。后缀以 # 开头，# 后可用英文、中文、emoji 等，如 #SG、#优选域名、#JP_域名、#🇸🇬。每次上传前会先读取原文件并复测其中的 IP / 域名，剔除失效项后与新结果合并，文件名和路径不变。</span></div>
@@ -122,10 +130,10 @@ details{margin:8px 0}summary{cursor:pointer;color:var(--mute)}
   </div>
   <div class="row">
     <label>服务器文件路径<input id="sf_dir" placeholder="/var/www/html/data"></label>
-    <label>对应的 https 下载前缀<input id="sf_base" placeholder="https://domain.com/data/"></label>
+    <label>对应的 https 下载路径（仅用于生成下载链接，不是 # 后缀）<input id="sf_base" placeholder="https://domain.com/wp-content/uploads/2026/01"></label>
   </div>
   <div id="sf_files_box"></div>
-  <div class="row"><button id="addsf">＋ 添加 SFTP 文件</button><span class="hint">下载地址形如 https://domain.com/data/ipchosen.txt 或 https://domain.com/wp-content/uploads/2026/01/ipchosen.txt，前缀须与上面的服务器路径对应。SFTP 首次连接不校验服务器主机密钥，请只连自己的服务器；安卓版暂不支持 SFTP。</span></div>
+  <div class="row"><button id="addsf">＋ 添加 SFTP 文件</button><span class="hint">下载链接 = 下载路径 + / + 文件名，如 https://domain.com/wp-content/uploads/2026/01/ipchosen.txt，下载路径须与上面的服务器文件路径指向同一个目录。服务器文件路径可以带空格等字符，两端的空格会自动去掉。SFTP 首次连接不校验服务器主机密钥，请只连自己的服务器；安卓版暂不支持 SFTP。</span></div>
 </section>
 
 <section id="z5"><h2><span class="ic">⏰</span>自动运行</h2>
@@ -145,6 +153,8 @@ details{margin:8px 0}summary{cursor:pointer;color:var(--mute)}
   <div class="tw"><table><thead><tr><th>#</th><th>地址</th><th>TLS 延迟</th><th>下载速度</th><th>丢包</th></tr></thead><tbody id="tb"></tbody></table></div>
   <p class="hint" id="empty">点击右上角“开始”。请先关闭代理 / VPN，保持直连网络。</p>
   <pre id="lk"></pre>
+  <div class="row"><button id="upgh">🐙 GitHub 上传</button><button id="upsf">🗄️ SFTP 上传</button><button id="vwgh">👁️ GitHub 查看</button><button id="vwsf">👁️ SFTP 查看</button></div>
+  <p class="hint">自动上传失败时，可在这里手动重试：上传会接着完成未完成的工作（待上传内容已经复测过远端旧条目，就不再复测），没有待上传内容时则重新执行一次上传。「查看」可以打开并编辑要上传的内容，新增的条目保存后再点上传即可写入。</p>
   <details><summary>🔔 Telegram 通知（填写 Token 和 Chat ID 后自动启用）</summary>
     <div class="row"><label>Bot Token<input id="tg_token" type="password" autocomplete="new-password"></label><label>Chat ID<input id="tg_chat"></label></div></details>
   <details><summary>✉️ 邮件通知（SMTP，五项填全后自动启用）</summary>
@@ -156,6 +166,11 @@ details{margin:8px 0}summary{cursor:pointer;color:var(--mute)}
   <div class="row"><button data-x="csv">⬇️ 导出 CSV</button><button data-x="txt">⬇️ 导出 TXT</button></div>
 </section>
 </main>
+<div id="viewer" hidden><div class="vbox">
+  <div class="vh"><b id="vt"></b><span class="sp"></span><button id="vreset">↩️ 放弃草稿并重新读取</button><button id="vclose">✖ 关闭</button></div>
+  <p class="hint">每行一个：IP 或域名，可带端口和后缀，如 1.2.3.4#SG、cf.example.com:2053#优选域名。点「编辑」修改，「保存」后再点结果区的上传按钮才会写入。你手动新增的条目会原样保留；远端原有条目会先复测并剔除失效项（待上传内容已复测过的不再复测）。</p>
+  <div id="vlist"></div>
+</div></div>
 <div id="toast"></div>
 
 <script>
@@ -199,9 +214,9 @@ $('addf').onclick=()=>addRow('files');$('addsf').onclick=()=>addRow('sf_files_bo
 
 const IDS=['count','port','minms','maxms','loss','dl_min','dl_secs','dl_url','sni','nseg','ndom','samples','tries','timeout','threads','url4','url6','urld','cidr4','cidr6','doms',
  'gh_user','gh_repo','sf_host','sf_user','sf_dir','sf_base','sch_mode','sch_hours','sch_wd','sch_time','tg_chat','mail_host','mail_port','mail_user','mail_to'],
- SEC=['gh_token','sf_pass','tg_token','mail_pass'],CHK=['v4','v6','vd','dl_on'];
+ SEC=['gh_token','gh_git_token','sf_pass','tg_token','mail_pass'],CHK=['v4','v6','vd','dl_on'];
 const rows=b=>[...$(b).querySelectorAll('.frow')].map(r=>{const n=r.querySelector('.fn').value.trim();return n?`${n}|${r.querySelector('.fs').value.trim()}|${r.querySelector('.fc').value||0}`:''}).filter(Boolean).join('\n');
-function collect(){const p=new URLSearchParams();IDS.concat(SEC).forEach(i=>p.set(i,$(i).value));CHK.forEach(i=>p.set(i,$(i).checked?1:0));
+function collect(){const p=new URLSearchParams();IDS.concat(SEC).forEach(i=>{const e=$(i);p.set(i,e.tagName=='TEXTAREA'?e.value:e.value.trim())});CHK.forEach(i=>p.set(i,$(i).checked?1:0));
   p.set('gh_files',rows('files'));p.set('sf_files',rows('sf_files_box'));return p.toString()}
 const clr=()=>SEC.forEach(k=>{if($(k).value){$(k).value='';$(k).placeholder='已保存（留空沿用）'}});
 
@@ -219,6 +234,8 @@ async function poll(){clearTimeout(timer);let s;try{s=await (await fetch('/api/s
   $('ph').textContent=s.phase+(s.total&&s.running?` · ${s.done}/${s.total}`:'');
   $('pb').style.width=(s.running&&s.total?Math.round(100*s.done/s.total):s.items.length?100:0)+'%';
   $('stat').className=s.running?'run':'';$('go').disabled=!!s.running;
+  ['upgh','upsf'].forEach(k=>$(k).disabled=!!s.running);
+  $('upgh').textContent='🐙 GitHub 上传'+(s.pend_gh?` ●有 ${s.pend_gh} 个待上传`:'');$('upsf').textContent='🗄️ SFTP 上传'+(s.pend_sf?` ●有 ${s.pend_sf} 个待上传`:'');
   $('note').hidden=!s.note;$('note').textContent=s.note?`⚠️ 疑似开启了代理 / VPN：${s.note}。在代理下得到的结果可能有误。`:'';
   const tb=$('tb');tb.textContent='';
   s.items.forEach((x,i)=>{const tr=document.createElement('tr');
@@ -239,6 +256,41 @@ $('savecfg').onclick=async()=>{await post('/api/save',collect());clr();toast('�
 $('auto').onclick=async()=>{await post('/api/save',collect());clr();toast(await (await post('/api/autostart','')).text())};
 $('tnote').onclick=async()=>{await post('/api/save',collect());clr();toast(await (await post('/api/test','')).text())};
 document.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>{location.href='/api/export?fmt='+b.dataset.x});
+
+const TN={gh:'GitHub',sf:'SFTP'};
+const SRC={draft:['已保存的草稿（尚未上传）',1],staged:['待上传的合并结果（上次上传未完成）',1],remote:['远端当前内容',0],new:['远端还没有这个文件',0],error:['读取失败',1]};
+let VT='';
+async function manualUpload(t){
+  let px={sus:0};try{px=await (await fetch('/api/proxy')).json()}catch{}
+  if(px.sus&&!confirm(`检测到可能开启了代理 / VPN：${px.why}。\n手动上传会复测远端文件里的 IP / 域名，代理下的结果可能有误。\n\n仍要继续吗？`))return;
+  const r=await post('/api/upload?t='+t,collect());
+  if(r.status==409)toast('已有任务在运行');clr();poll()}
+async function openView(t,reset){
+  VT=t;$('viewer').hidden=false;$('vt').textContent=TN[t]+' 查看 / 编辑';$('vlist').textContent='读取中…';
+  let j;try{j=await (await post('/api/view?t='+t,collect()+(reset?'&reset=1':''))).json()}catch{$('vlist').textContent='读取失败，请稍后重试';return}
+  clr();$('vlist').textContent='';
+  if(!j.ok){$('vlist').textContent=j.msg||'无法读取';return}
+  if(!j.files.length)$('vlist').textContent='还没有填写文件名';
+  j.files.forEach(f=>{const c=document.createElement('div');c.className='vcard';
+    const head=document.createElement('div');head.className='row';
+    const nm=document.createElement('b');nm.textContent=f.name;
+    const bd=document.createElement('span');const sr=SRC[f.src]||['',0];bd.className='badge'+(sr[1]?' warn':'');bd.textContent=sr[0]+(f.note?'：'+f.note:'');
+    head.append(nm,bd);
+    const ta=document.createElement('textarea');ta.readOnly=true;ta.value=f.text;
+    const bar=document.createElement('div');bar.className='row';
+    const be=document.createElement('button');be.textContent='✏️ 编辑';
+    const bs=document.createElement('button');bs.textContent='💾 保存';
+    be.onclick=()=>{ta.readOnly=false;ta.focus()};
+    bs.onclick=async()=>{ta.readOnly=true;
+      try{const r=await (await post('/api/view_save',new URLSearchParams({t,name:f.name,text:ta.value}).toString())).json();
+        toast(r.msg||'已保存');if(r.ok){bd.className='badge warn';bd.textContent=SRC.draft[0]}}catch{toast('保存失败')}};
+    if(f.src!='error')bar.append(be,bs);
+    c.append(head,ta,bar);$('vlist').append(c)})}
+$('upgh').onclick=()=>manualUpload('gh');$('upsf').onclick=()=>manualUpload('sf');
+$('vwgh').onclick=()=>openView('gh');$('vwsf').onclick=()=>openView('sf');
+$('vclose').onclick=()=>{$('viewer').hidden=true};
+$('vreset').onclick=()=>{if(confirm('放弃已保存的草稿，并重新读取？'))openView(VT,true)};
+document.addEventListener('keydown',e=>{if(e.key=='Escape')$('viewer').hidden=true});
 
 load().then(poll);
 </script>

@@ -30,7 +30,7 @@
 
 #define DEFAULT_PORT 18443
 #define MAXIP 3000
-#define REQ_MAX 65536
+#define REQ_MAX 262144
 #define BODY_MAX (512 * 1024)
 
 #define DEF4 "173.245.48.0/20\n103.21.244.0/22\n103.22.200.0/22\n103.31.4.0/22\n141.101.64.0/18\n108.162.192.0/18\n" \
@@ -39,7 +39,7 @@
 #define DEF6 "2400:cb00::/32\n2606:4700::/32\n2803:f800::/32\n2405:b500::/32\n2405:8100::/32\n2a06:98c0::/29\n2c0f:f248::/32\n"
 
 /* 一个候选：IP 或域名 + 端口 */
-typedef struct { char host[128], suf[64]; int port, dom, ok, tries; double ms, mbps; } Item;
+typedef struct { char host[128], suf[64]; int port, dom, keep, ok, tries; double ms, mbps; } Item;   /* keep：用户手动保留的条目，自带后缀优先 */
 typedef struct { const char *sni[8]; int nsni, port, timeout, tries, threads; } Prm;
 typedef struct { char host[200], path[400]; int secs; } Dl;
 typedef struct { char name[96], suf[96]; int cnt; } Rule;
@@ -51,13 +51,13 @@ static Dl DL;
 static Item *res;                                   /* 最近一次筛选结果 */
 static int nres, running, done, total;
 static int e_to, e_cert, e_conn, e_oth;             /* 失败原因统计 */
-static char phase[480] = "空闲", links[2048], notes[240], secrets[4096], cfg[REQ_MAX];
+static char phase[1600] = "空闲", links[2048], notes[240], secrets[4096], cfg[REQ_MAX];
 static char self[4096], exe_dir[4096], wd[4096], page[4200], html_path[4200];
 static time_t last_run;
 static int g_port = DEFAULT_PORT;
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t rs = 88172645463325252ULL;
-static __thread char ferr[160];
+static __thread char ferr[400];
 static __thread const char *xhdr;
 
 /* ---------- libcurl 公共设置 ---------- */
@@ -139,7 +139,7 @@ static void urlenc(const char *s, char *o, size_t n) {
 }
 
 /* 密钥单独保存在 data/secrets.txt，不随配置回显 */
-static const char *SEC[] = { "gh_token", "sf_pass", "tg_token", "mail_pass", NULL };
+static const char *SEC[] = { "gh_token", "gh_git_token", "sf_pass", "tg_token", "mail_pass", NULL };
 static void getv(const char *c, const char *k, char *o, size_t n) { form_get(c, k, o, n); if (!o[0]) form_get(secrets, k, o, n); }
 static void save_secrets(const char *body) {         /* 表单里填了新值才覆盖旧值 */
     char *ns = malloc(sizeof secrets); if (!ns) return;
@@ -236,7 +236,7 @@ static int parse_entry(char *l, Item *it) {          /* host[:port][#后缀]、[
 }
 /* 输出格式：443 不写端口；其他端口写成 ip:端口 / [v6]:端口 / 域名:端口；后缀原样追加 */
 static void fmt_entry(const Item *it, const char *suf, char *o, size_t n) {
-    const char *s = suf[0] ? suf : it->suf; int v6 = strchr(it->host, ':') != NULL;
+    const char *s = (it->keep && it->suf[0]) ? it->suf : suf[0] ? suf : it->suf; int v6 = strchr(it->host, ':') != NULL;
     if (it->port == 443) snprintf(o, n, "%s%s", it->host, s);
     else if (v6) snprintf(o, n, "[%s]:%d%s", it->host, it->port, s);
     else snprintf(o, n, "%s:%d%s", it->host, it->port, s);
@@ -475,24 +475,52 @@ static void summary(char *o, size_t n) {              /* 状态 + 前 10 个优�
     pthread_mutex_unlock(&mu);
 }
 
-/* ---------- 文件合并：读取旧文件 → 复测 → 剔除失效 → 与新结果合并 ---------- */
-static int merge_old(const char *old, Item *m, Item *good, int ng, double ml, int mn, int mx) {
-    int n = 0; char *cp = old ? strdup(old) : NULL, *sp = NULL;
-    for (char *l = cp ? strtok_r(cp, "\r\n", &sp) : NULL; l && n < MAXIP; l = strtok_r(NULL, "\r\n", &sp)) {
-        Item t; if (parse_entry(l, &t)) m[n++] = t;      /* IP / 域名、端口、后缀都会被解析保留 */
-    }
-    free(cp);
-    if (n) {
-        setphase("复测旧文件中的 IP / 域名"); prog(n); run_pool(m, n);
-        int k = 0; for (int i = 0; i < n; i++) if (pass(&m[i], ml, mn, mx)) m[k++] = m[i];
-        n = k;
-    }
-    for (int i = 0; i < ng; i++) {
-        int dup = 0; for (int k = 0; k < n; k++) if (m[k].port == good[i].port && !strcmp(m[k].host, good[i].host)) { dup = 1; break; }
-        if (!dup && n < MAXIP * 2) m[n++] = good[i];
-    }
-    qsort(m, (size_t)n, sizeof *m, cmp); return n;
+/* ---------- 本地文件：待上传内容（stage）与手动编辑草稿（manual） ---------- */
+static char *read_text(const char *path) {
+    FILE *f = fopen(path, "r"); if (!f) return NULL;
+    char *b = malloc(BODY_MAX + 1); if (!b) { fclose(f); return NULL; }
+    size_t r = fread(b, 1, BODY_MAX, f); b[r] = 0; fclose(f); return b;
 }
+static int write_text(const char *path, const char *text) {   /* 先写临时文件再改名，避免写一半断电 */
+    char tmp[340]; snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w"); if (!f) return -1;
+    int ok = fputs(text, f) >= 0; ok = (fclose(f) == 0) && ok;
+    if (!ok || rename(tmp, path)) { remove(tmp); return -1; }
+    return 0;
+}
+static void spath(char *o, size_t n, const char *dir, const char *tag, const char *name, const char *ext) { snprintf(o, n, "data/%s/%s__%s%s", dir, tag, name, ext); }
+
+/* ---------- 条目列表（IP / 域名[:端口][#后缀]） ---------- */
+static int parse_list(const char *text, Item *out, int cap, int keep) {   /* 逐行解析，忽略无法识别的行，同 host:port 去重 */
+    int n = 0; char *cp = text ? strdup(text) : NULL, *sp = NULL;
+    for (char *l = cp ? strtok_r(cp, "\r\n", &sp) : NULL; l && n < cap; l = strtok_r(NULL, "\r\n", &sp)) {
+        Item t; if (!parse_entry(l, &t)) continue;
+        t.keep = keep;
+        int dup = 0; for (int k = 0; k < n; k++) if (out[k].port == t.port && !strcmp(out[k].host, t.host)) { dup = 1; break; }
+        if (!dup) out[n++] = t;
+    }
+    free(cp); return n;
+}
+static int in_list(const Item *a, int n, const Item *x) { for (int i = 0; i < n; i++) if (a[i].port == x->port && !strcmp(a[i].host, x->host)) return 1; return 0; }
+static int line_in(const Item *a, int n, const Item *x) { for (int i = 0; i < n; i++) if (a[i].port == x->port && !strcmp(a[i].host, x->host) && !strcmp(a[i].suf, x->suf)) return 1; return 0; }
+
+typedef struct { char *d; size_t n, cap; } SB;       /* 简单的字符串拼接器，用来拼 JSON */
+static void sb_cat(SB *b, const char *s) {
+    size_t l = strlen(s);
+    if (b->n + l + 1 > b->cap) { size_t nc = (b->n + l + 1) * 2; char *nd = realloc(b->d, nc); if (!nd) return; b->d = nd; b->cap = nc; }
+    memcpy(b->d + b->n, s, l + 1); b->n += l;
+}
+static void sb_json(SB *b, const char *s) {          /* 追加 JSON 转义后的文本 */
+    char buf[512]; size_t k = 0;
+    for (; *s; s++) {
+        if (k + 8 > sizeof buf) { buf[k] = 0; sb_cat(b, buf); k = 0; }
+        if (*s == '"' || *s == '\\') { buf[k++] = '\\'; buf[k++] = *s; }
+        else if (*s == '\n') { buf[k++] = '\\'; buf[k++] = 'n'; }
+        else if ((unsigned char)*s >= 32) buf[k++] = *s;
+    }
+    buf[k] = 0; sb_cat(b, buf);
+}
+
 static int parse_rule(char *ln, Rule *r) {            /* 一行：文件名|后缀|个数；后缀可省略 #，可含中文 / emoji */
     char *p = ln, *nm = strsep(&p, "|"), *sf = strsep(&p, "|"); if (!sf) sf = "";
     memset(r, 0, sizeof *r); r->cnt = p ? atoi(p) : 0;
@@ -512,135 +540,456 @@ static char *render(Item *m, int n, int *cursor, const Rule *r) {
     for (int k = 0; k < take; k++) { char e[330]; fmt_entry(&m[(*cursor + k) % n], r->suf, e, sizeof e); L += (size_t)snprintf(o + L, 340, "%s\n", e); }
     o[L] = 0; *cursor = (*cursor + take) % n; return o;
 }
-static void addlink(const char *a, const char *b, const char *c) {
-    pthread_mutex_lock(&mu); size_t L = strlen(links);
-    snprintf(links + L, sizeof links - L, "%s%s%s\n", a, b, c); pthread_mutex_unlock(&mu);
-}
 
-/* ---------- GitHub：REST API（不依赖 git，安卓也可用） ---------- */
-static long ghreq(const char *method, const char *url, const char *tk, const char *body, char **out) {
-    Buf b = { 0 }; CURL *c = curl_easy_init(); if (!c) return 0;
-    ca(c); direct(c); struct curl_slist *h = NULL; char t[300];
-    snprintf(t, sizeof t, "Authorization: Bearer %s", tk); h = curl_slist_append(h, t);
-    h = curl_slist_append(h, "Accept: application/vnd.github+json"); h = curl_slist_append(h, "X-GitHub-Api-Version: 2022-11-28");
-    if (body) h = curl_slist_append(h, "Content-Type: application/json");
-    curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, method);
-    curl_easy_setopt(c, CURLOPT_HTTPHEADER, h); curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, wcb); curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
-    if (body) curl_easy_setopt(c, CURLOPT_POSTFIELDS, body);
-    long st = 0; if (curl_easy_perform(c) == CURLE_OK) curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &st);
-    curl_slist_free_all(h); curl_easy_cleanup(c);
-    if (out) *out = b.d; else free(b.d);
-    return st;
+/* ---------- 上传目标：GitHub（REST API）/ SFTP（libcurl） ---------- */
+typedef struct {
+    int kind;                                         /* 1 GitHub / 2 SFTP */
+    char tag[3], user[64], repo[64], tk[200], gtk[200], br[64];
+    char host[96], pw[160], dir[200], base[200], files[2048];
+} Tgt;
+static void trim(char *s) {
+    char *p = s; while (isspace((unsigned char)*p)) p++;
+    memmove(s, p, strlen(p) + 1);
+    for (size_t n = strlen(s); n && isspace((unsigned char)s[n - 1]);) s[--n] = 0;
 }
-/* 返回：0 未填写 / 1 成功 / 2 成功但有警告 / -1 失败 */
-static int upload_github(const char *c, Item *good, int ng, double ml, int mn, int mx) {
-    char user[64], repo[64], tk[200], files[2048], url[400], br[64] = "main";
-    form_get(c, "gh_user", user, sizeof user); form_get(c, "gh_repo", repo, sizeof repo);
-    getv(c, "gh_token", tk, sizeof tk); form_get(c, "gh_files", files, sizeof files);
-    if (!user[0] || !repo[0] || !tk[0] || !files[0]) return 0;
-    if (!safe(user) || !safe(repo) || strpbrk(tk, "\r\n \t")) { setphase("GitHub 信息含非法字符"); return -1; }
-    setphase("连接 GitHub");
-    snprintf(url, sizeof url, "https://api.github.com/repos/%s/%s", user, repo);
-    char *j = NULL; long st = ghreq("GET", url, tk, NULL, &j);
-    if (st != 200) { free(j); setphase(st == 401 ? "GitHub 认证失败：请检查 PAT" : st == 404 ? "找不到仓库：请检查用户名、仓库名和 PAT 权限" : "无法连接 GitHub API：请检查网络"); return -1; }
-    char *d = j ? json_dup(j, "default_branch") : NULL; if (d && d[0] && safe(d)) snprintf(br, sizeof br, "%s", d);
-    free(d); free(j);
-    Item *m = calloc(MAXIP * 2, sizeof *m); if (!m) return -1;
-    int cursor = 0, bad = 0; char *sp = NULL;
-    for (char *ln = strtok_r(files, "\r\n", &sp); ln; ln = strtok_r(NULL, "\r\n", &sp)) {
-        Rule r; if (!parse_rule(ln, &r)) { bad = 1; continue; }
-        snprintf(url, sizeof url, "https://api.github.com/repos/%s/%s/contents/%s", user, repo, r.name);
-        setphase("读取仓库中的旧文件");
-        char *old = NULL, *sha = NULL; j = NULL; st = ghreq("GET", url, tk, NULL, &j);
-        if (st == 200 && j) { sha = json_dup(j, "sha"); char *cb = json_dup(j, "content"); if (cb) { size_t L; old = b64dec(cb, &L); free(cb); } }
-        free(j);
-        int n = merge_old(old, m, good, ng, ml, mn, mx); free(old);
-        if (!n) { free(sha); continue; }              /* 没有可写入的内容时，不覆盖原文件 */
-        char *txt = render(m, n, &cursor, &r), *e = txt ? b64enc(txt, strlen(txt)) : NULL; free(txt);
-        if (!e) { free(sha); bad = 1; continue; }
-        size_t L = strlen(e) + 200; char *body = malloc(L);
-        if (body) snprintf(body, L, "{\"message\":\"update ips\",\"content\":\"%s\"%s%s%s}", e, sha ? ",\"sha\":\"" : "", sha ? sha : "", sha ? "\"" : "");
-        free(e); free(sha);
-        setphase("上传到 GitHub");
-        st = body ? ghreq("PUT", url, tk, body, NULL) : 0; free(body);
-        if (st != 200 && st != 201) { free(m); setphase("GitHub 上传失败：请确认 PAT 对该仓库有 Contents 读写权限"); return -1; }
-        char raw[400]; snprintf(raw, sizeof raw, "https://raw.githubusercontent.com/%s/%s/refs/heads/%s/%s", user, repo, br, r.name);
-        addlink(raw, "", "");
+static int norm_dir(char *d) {                        /* \ 换成 /，合并重复斜杠，去掉末尾斜杠；含 .. 或控制字符返回 0 */
+    char *w = d; int prev = 0;
+    for (char *r = d; *r; r++) {
+        char ch = *r == '\\' ? '/' : *r;
+        if ((unsigned char)ch < 32 || ch == 127) return 0;
+        if (ch == '/' && prev) continue;
+        *w++ = ch; prev = ch == '/';
     }
-    free(m);
-    if (bad) { setphase("GitHub 已完成，部分文件名或后缀不合法，已跳过"); return 2; }
+    *w = 0; size_t n = strlen(d); while (n > 1 && d[n - 1] == '/') d[--n] = 0;
+    return !strstr(d, "..");
+}
+static void enc_path(const char *s, char *o, size_t n) {
+    size_t k = 0;
+    for (; *s && k + 4 < n; s++) {
+        if (isalnum((unsigned char)*s) || strchr("/._-~", *s)) o[k++] = *s;
+        else k += (size_t)snprintf(o + k, n - k, "%%%02X", (unsigned char)*s);
+    }
+    o[k] = 0;
+}
+/* 返回：0 未填写 / 1 可用 / -1 内容不合法（原因已写入 phase） */
+static int tgt_init(Tgt *t, int kind, const char *c) {
+    memset(t, 0, sizeof *t); t->kind = kind; snprintf(t->tag, sizeof t->tag, "%s", kind == 1 ? "gh" : "sf"); snprintf(t->br, sizeof t->br, "main");
+    char msg[300];
+    if (kind == 1) {
+        form_get(c, "gh_user", t->user, sizeof t->user); form_get(c, "gh_repo", t->repo, sizeof t->repo);
+        getv(c, "gh_token", t->tk, sizeof t->tk); getv(c, "gh_git_token", t->gtk, sizeof t->gtk);
+        form_get(c, "gh_files", t->files, sizeof t->files);
+        trim(t->user); trim(t->repo); trim(t->tk); trim(t->gtk);
+        if (!t->gtk[0]) snprintf(t->gtk, sizeof t->gtk, "%s", t->tk);           /* 没单独填 git 用 PAT 就复用 API 的 PAT */
+        if (!t->user[0] || !t->repo[0] || !t->tk[0] || !t->files[0]) return 0;
+        if (!safe(t->user) || !safe(t->repo) || strpbrk(t->tk, "\r\n \t") || strpbrk(t->gtk, "\r\n \t")) { setphase("GitHub 用户名 / 仓库名 / PAT 含非法字符（用户名和仓库名只能含字母数字 . _ -）"); return -1; }
+        return 1;
+    }
+    form_get(c, "sf_host", t->host, sizeof t->host); form_get(c, "sf_user", t->user, sizeof t->user);
+    getv(c, "sf_pass", t->pw, sizeof t->pw); form_get(c, "sf_dir", t->dir, sizeof t->dir);
+    form_get(c, "sf_base", t->base, sizeof t->base); form_get(c, "sf_files", t->files, sizeof t->files);
+    trim(t->host); trim(t->user); trim(t->dir); trim(t->base);
+    if (!strncmp(t->host, "sftp://", 7)) memmove(t->host, t->host + 7, strlen(t->host + 7) + 1);
+    if (!t->host[0] || !t->user[0] || !t->pw[0] || !t->files[0]) return 0;
+    for (const char *q = t->host; *q; q++)
+        if (!isalnum((unsigned char)*q) && !strchr(".-_:", *q)) {
+            snprintf(msg, sizeof msg, "SFTP「服务器地址」含不允许的字符（第 %d 个字符，编码 0x%02X）：「%s」。只能含字母、数字和 . - _ :，不要带 sftp:// 和路径",
+                     (int)(q - t->host) + 1, (unsigned char)*q, t->host);
+            setphase(msg); return -1;
+        }
+    if (!norm_dir(t->dir)) { snprintf(msg, sizeof msg, "SFTP「服务器文件路径」不合法：「%s」（不能含 .. 或控制字符）", t->dir); setphase(msg); return -1; }
+    if (strncmp(t->base, "https://", 8)) t->base[0] = 0;
     return 1;
 }
+static const char *tgt_name(const Tgt *t) { return t->kind == 1 ? "GitHub" : "SFTP"; }
+static void sftp_url(const Tgt *t, const char *name, char *o, size_t n) {   /* 双斜杠 = 服务器绝对路径；不以 / 开头 = 相对登录目录 */
+    char e[700]; enc_path(t->dir, e, sizeof e);
+    if (!t->dir[0]) snprintf(o, n, "sftp://%s/%s", t->host, name);
+    else if (!strcmp(t->dir, "/")) snprintf(o, n, "sftp://%s//%s", t->host, name);
+    else snprintf(o, n, "sftp://%s/%s/%s", t->host, e, name);
+}
+static void addlink(const char *u) {
+    pthread_mutex_lock(&mu);
+    if (!strstr(links, u)) { size_t L = strlen(links); snprintf(links + L, sizeof links - L, "%s\n", u); }
+    pthread_mutex_unlock(&mu);
+}
+static void tgt_link(const Tgt *t, const char *name) {
+    char u[700];
+    if (t->kind == 1) snprintf(u, sizeof u, "https://raw.githubusercontent.com/%s/%s/refs/heads/%s/%s", t->user, t->repo, t->br, name);
+    else if (t->base[0]) snprintf(u, sizeof u, "%s%s%s", t->base, t->base[strlen(t->base) - 1] == '/' ? "" : "/", name);
+    else return;
+    addlink(u);
+}
 
-/* ---------- SFTP：libcurl（需带 libssh2；安卓版暂不支持） ---------- */
+/* GitHub API：连接超时 10 秒；失败自动重试 3 次（第 2 次只用 IPv4，第 3 次改用 HTTP/1.1）；失败原因写入 ferr */
+static long ghreq(const char *method, const char *url, const char *tk, const char *body, char **out) {
+    long st = 0; if (out) *out = NULL; ferr[0] = 0;
+    for (int at = 0; at < 3; at++) {
+        Buf b = { 0 }; CURL *c = curl_easy_init();
+        if (!c) { snprintf(ferr, sizeof ferr, "curl 初始化失败"); return 0; }
+        ca(c); direct(c);
+        struct curl_slist *h = NULL; char t[300];
+        snprintf(t, sizeof t, "Authorization: Bearer %s", tk); h = curl_slist_append(h, t);
+        h = curl_slist_append(h, "Accept: application/vnd.github+json"); h = curl_slist_append(h, "X-GitHub-Api-Version: 2022-11-28");
+        if (body) h = curl_slist_append(h, "Content-Type: application/json");
+        curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, method);
+        curl_easy_setopt(c, CURLOPT_HTTPHEADER, h); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 40L);
+        curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, wcb); curl_easy_setopt(c, CURLOPT_WRITEDATA, &b);
+        if (body) curl_easy_setopt(c, CURLOPT_POSTFIELDS, body); else curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+        if (at >= 1) curl_easy_setopt(c, CURLOPT_IPRESOLVE, (long)CURL_IPRESOLVE_V4);
+        if (at >= 2) curl_easy_setopt(c, CURLOPT_HTTP_VERSION, (long)CURL_HTTP_VERSION_1_1);
+        CURLcode rc = curl_easy_perform(c); st = 0;
+        if (rc == CURLE_OK) curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &st); else snprintf(ferr, sizeof ferr, "%s", curl_easy_strerror(rc));
+        curl_slist_free_all(h); curl_easy_cleanup(c);
+        int retry = rc != CURLE_OK || st == 429 || st >= 500 || (st == 403 && b.d && strstr(b.d, "rate limit"));
+        if (!retry || at == 2) {
+            if (rc == CURLE_OK && st >= 400) { char *mg = b.d ? json_dup(b.d, "message") : NULL; snprintf(ferr, sizeof ferr, "HTTP %ld %s", st, mg ? mg : ""); free(mg); }
+            if (out) *out = b.d; else free(b.d);
+            return st;
+        }
+        free(b.d); sleep((unsigned)(1 << at));
+    }
+    return st;
+}
 static CURL *sftp_open(const char *url, const char *user, const char *pw) {
     CURL *c = curl_easy_init(); if (!c) return NULL;
     ca(c); direct(c); curl_easy_setopt(c, CURLOPT_URL, url); curl_easy_setopt(c, CURLOPT_USERNAME, user);
-    curl_easy_setopt(c, CURLOPT_PASSWORD, pw); curl_easy_setopt(c, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(c, CURLOPT_PASSWORD, pw); curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L); curl_easy_setopt(c, CURLOPT_TIMEOUT, 40L);
     return c;
 }
-static int okpath(const char *s) {
-    if (s[0] != '/' || strstr(s, "..")) return 0;
-    for (; *s; s++) if (!isalnum((unsigned char)*s) && !strchr("/._-", *s)) return 0;
-    return 1;
-}
-static int upload_sftp(const char *c, Item *good, int ng, double ml, int mn, int mx) {
-    char host[96], user[64], pw[160], dir[200], base[200], files[2048];
-    form_get(c, "sf_host", host, sizeof host); form_get(c, "sf_user", user, sizeof user);
-    getv(c, "sf_pass", pw, sizeof pw); form_get(c, "sf_dir", dir, sizeof dir);
-    form_get(c, "sf_base", base, sizeof base); form_get(c, "sf_files", files, sizeof files);
-    if (!host[0] || !user[0] || !pw[0] || !dir[0] || !files[0]) return 0;
-    if (!has_proto("sftp")) { setphase("当前 libcurl 不支持 SFTP（安卓版暂不支持，可改用 GitHub）"); return -1; }
-    int okh = 1; for (char *q = host; *q; q++) if (!isalnum((unsigned char)*q) && !strchr(".-:", *q)) okh = 0;
-    if (!okh || !okpath(dir)) { setphase("SFTP 地址或路径含非法字符（路径须为以 / 开头的绝对路径）"); return -1; }
-    Item *m = calloc(MAXIP * 2, sizeof *m); if (!m) return -1;
-    int cursor = 0, bad = 0; char *sp = NULL;
-    for (char *ln = strtok_r(files, "\r\n", &sp); ln; ln = strtok_r(NULL, "\r\n", &sp)) {
-        Rule r; char url[512]; if (!parse_rule(ln, &r)) { bad = 1; continue; }
-        snprintf(url, sizeof url, "sftp://%s/%s/%s", host, dir, r.name);      /* 双斜杠 = 服务器绝对路径 */
-        setphase("读取 SFTP 上的旧文件");
-        char *old = NULL; Buf b = { 0 }; CURL *cu = sftp_open(url, user, pw);
-        if (cu) {
-            curl_easy_setopt(cu, CURLOPT_WRITEFUNCTION, wcb); curl_easy_setopt(cu, CURLOPT_WRITEDATA, &b);
-            if (curl_easy_perform(cu) == CURLE_OK) old = b.d; else free(b.d);
-            curl_easy_cleanup(cu);
-        }
-        int n = merge_old(old, m, good, ng, ml, mn, mx); free(old);
-        if (!n) continue;
-        char *txt = render(m, n, &cursor, &r); if (!txt) { bad = 1; continue; }
-        Src s = { txt, strlen(txt), 0 }; int rc = -1; setphase("上传到 SFTP");
-        if ((cu = sftp_open(url, user, pw))) {
-            curl_easy_setopt(cu, CURLOPT_UPLOAD, 1L); curl_easy_setopt(cu, CURLOPT_READFUNCTION, rcb);
-            curl_easy_setopt(cu, CURLOPT_READDATA, &s); curl_easy_setopt(cu, CURLOPT_INFILESIZE_LARGE, (curl_off_t)s.n);
-            curl_easy_setopt(cu, CURLOPT_FTP_CREATE_MISSING_DIRS, 1L);
-            rc = (int)curl_easy_perform(cu); curl_easy_cleanup(cu);
-        }
-        free(txt);
-        if (rc != CURLE_OK) { free(m); setphase("SFTP 上传失败：请检查地址、账号、密码和路径"); return -1; }
-        if (!strncmp(base, "https://", 8)) addlink(base, base[strlen(base) - 1] == '/' ? "" : "/", r.name);
+/* ---------- git 备用通道：GitHub API 失败时改用 git 读写（token 写入 data/gitcred，命令行里不出现 token） ---------- */
+static __thread int gh_api_down;                      /* 本次操作里 API 已确认不可用，直接走 git */
+static __thread char gh_apierr[400];                  /* 预检时记下的 API 失败原因 */
+static int have_git(void) { static int v = -1; if (v < 0) v = system("git --version >/dev/null 2>&1") == 0; return v; }
+static int git_cmd(const char *fmt, ...) {
+    char args[1000], cmd[2600]; va_list ap;
+    if (!wd[0] && !getcwd(wd, sizeof wd)) return 0;
+    if (strlen(wd) > 1000) { snprintf(ferr, sizeof ferr, "数据目录路径过长，无法使用 git 备用通道"); return 0; }
+    va_start(ap, fmt); vsnprintf(args, sizeof args, fmt, ap); va_end(ap);
+    snprintf(cmd, sizeof cmd, "git -c credential.helper= -c credential.helper='store --file=%s/data/gitcred' -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 %s >/dev/null 2>'%s/data/git.err'", wd, args, wd);
+    int rc = system(cmd);
+    if (rc) {
+        char *e = read_text("data/git.err");
+        if (e) { for (char *p = e; *p; p++) if (*p == '\n' || *p == '\r') *p = ' '; trim(e); snprintf(ferr, sizeof ferr, "%.300s", e); free(e); }
     }
-    free(m);
-    if (bad) { setphase("SFTP 已完成，部分文件名或后缀不合法，已跳过"); return 2; }
+    return rc == 0;
+}
+static int git_sync(const Tgt *t, char *dir, size_t dn, int *empty) {     /* 克隆或更新到最新；空仓库时 *empty=1 */
+    char cu[300], ct[600], line[1000], gd[4400]; int fresh;
+    *empty = 0;
+    if (!have_git()) { snprintf(ferr, sizeof ferr, "本机没有安装 git"); return 0; }
+    if (!t->gtk[0]) { snprintf(ferr, sizeof ferr, "未填写 git 用 PAT"); return 0; }
+    if (!wd[0] && !getcwd(wd, sizeof wd)) { snprintf(ferr, sizeof ferr, "无法确定数据目录"); return 0; }
+    snprintf(dir, dn, "%s/data/git/%s__%s", wd, t->user, t->repo);
+    if (strchr(dir, '\'')) { snprintf(ferr, sizeof ferr, "数据目录路径含单引号，无法使用 git 备用通道"); return 0; }
+    urlenc(t->user, cu, sizeof cu); urlenc(t->gtk, ct, sizeof ct);
+    snprintf(line, sizeof line, "https://%s:%s@github.com\n", cu, ct);
+    mkdir("data", 0700); mkdir("data/git", 0700);
+    if (write_text("data/gitcred", line)) { snprintf(ferr, sizeof ferr, "无法写入 data/gitcred"); return 0; }
+    chmod("data/gitcred", 0600);
+    snprintf(gd, sizeof gd, "%s/.git", dir); fresh = access(gd, R_OK) != 0;
+    if (fresh) {
+        sh("rm -rf '%s'", dir);                       /* 清掉上次中断留下的半成品目录 */
+        if (!git_cmd("clone -q --depth 1 https://github.com/%s/%s.git '%s'", t->user, t->repo, dir)) return 0;
+        if (!git_cmd("-C '%s' rev-parse --verify -q HEAD", dir)) *empty = 1;
+    } else if (git_cmd("-C '%s' fetch -q --depth 1 origin HEAD", dir)) {
+        if (!git_cmd("-C '%s' reset -q --hard FETCH_HEAD", dir)) return 0;
+    } else {
+        if (git_cmd("-C '%s' rev-parse --verify -q HEAD", dir)) return 0;      /* 有本地提交但 fetch 失败：网络问题 */
+        *empty = 1;                                                          /* 没有任何提交：远端是空仓库 */
+    }
     return 1;
 }
-static void upload_all(const char *c, Item *good, int ng, double ml, int mn, int mx) {
-    int a = upload_github(c, good, ng, ml, mn, mx); if (a < 0) return;
-    int b = upload_sftp(c, good, ng, ml, mn, mx); if (b < 0) return;
-    if (a == 2 || b == 2) return;
-    setphase(a > 0 || b > 0 ? "全部完成" : "筛选完成：未填写上传信息，仅筛选不上传");
+static int git_get(const Tgt *t, const char *name, char **text) {
+    char dir[4300], p[4500]; int empty; *text = NULL;
+    if (!git_sync(t, dir, sizeof dir, &empty)) return 0;
+    snprintf(p, sizeof p, "%s/%s", dir, name); *text = read_text(p); return 1;
+}
+static int git_put(const Tgt *t, const char *name, const char *txt) {
+    char dir[4300], p[4500]; int empty;
+    if (!git_sync(t, dir, sizeof dir, &empty)) return 0;
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    if (write_text(p, txt)) { snprintf(ferr, sizeof ferr, "无法写入本地仓库文件"); return 0; }
+    if (!git_cmd("-C '%s' add -- '%s'", dir, name)) return 0;
+    if (git_cmd("-C '%s' diff --cached --quiet", dir)) return 1;              /* 没有变化，无需提交 */
+    if (!git_cmd("-C '%s' -c user.name=cfip -c user.email=cfip@users.noreply.github.com commit -q -m 'update ips'", dir)) return 0;
+    return git_cmd("-C '%s' push -q origin HEAD", dir);
+}
+static int git_ok(const Tgt *t) { return t->kind == 1 && t->gtk[0] && have_git(); }
+
+/* 读取远端文件。返回 1 成功（*text 为 NULL 表示文件不存在）/ 0 失败（原因在 ferr，此时绝不能当作“文件不存在”去覆盖） */
+static int tgt_get(const Tgt *t, const char *name, char **text, char **sha) {
+    *text = NULL; if (sha) *sha = NULL; ferr[0] = 0;
+    if (t->kind == 1) {
+        char url[600], *j = NULL, ae[400] = "", ge[400]; long st = 0;
+        if (gh_api_down) snprintf(ae, sizeof ae, "%s", gh_apierr);
+        else {
+            snprintf(url, sizeof url, "https://api.github.com/repos/%s/%s/contents/%s", t->user, t->repo, name);
+            st = ghreq("GET", url, t->tk, NULL, &j);
+            if (st == 200 && j) {
+                if (sha) *sha = json_dup(j, "sha");
+                char *cb = json_dup(j, "content"); size_t L;
+                *text = cb ? b64dec(cb, &L) : strdup(""); free(cb); free(j); return 1;
+            }
+            free(j); if (st == 404) return 1;
+            snprintf(ae, sizeof ae, "%s", ferr);
+        }
+        if (git_ok(t)) {                              /* API 不通：改用 git 读取 */
+            gh_api_down = 1; setphase("GitHub API 读取失败，改用 git 通道读取");
+            if (git_get(t, name, text)) return 1;
+            snprintf(ge, sizeof ge, "%s", ferr); snprintf(ferr, sizeof ferr, "API %.180s；git %.180s", ae, ge);
+        }
+        return 0;
+    }
+    char url[1000]; sftp_url(t, name, url, sizeof url);
+    for (int at = 0; at < 2; at++) {
+        Buf b = { 0 }; CURL *cu = sftp_open(url, t->user, t->pw);
+        if (!cu) { snprintf(ferr, sizeof ferr, "curl 初始化失败"); return 0; }
+        curl_easy_setopt(cu, CURLOPT_WRITEFUNCTION, wcb); curl_easy_setopt(cu, CURLOPT_WRITEDATA, &b);
+        CURLcode rc = curl_easy_perform(cu); curl_easy_cleanup(cu);
+        if (rc == CURLE_OK) { *text = b.d ? b.d : strdup(""); return 1; }
+        free(b.d);
+        if (rc == CURLE_REMOTE_FILE_NOT_FOUND) return 1;
+        snprintf(ferr, sizeof ferr, "%s", curl_easy_strerror(rc));
+        if (rc == CURLE_LOGIN_DENIED) return 0;
+        sleep(1);
+    }
+    return 0;
+}
+static int tgt_put(const Tgt *t, const char *name, const char *txt, const char *sha) {
+    ferr[0] = 0;
+    if (t->kind == 1) {
+        char url[600]; snprintf(url, sizeof url, "https://api.github.com/repos/%s/%s/contents/%s", t->user, t->repo, name);
+        char *cur = sha ? strdup(sha) : NULL, ae[400] = "", ge[400]; int ok = 0;
+        if (gh_api_down) snprintf(ae, sizeof ae, "%s", gh_apierr);
+        for (int at = 0; at < 2 && !ok && !gh_api_down; at++) {
+            char *e = b64enc(txt, strlen(txt)); if (!e) break;
+            size_t L = strlen(e) + 200; char *body = malloc(L); if (!body) { free(e); break; }
+            snprintf(body, L, "{\"message\":\"update ips\",\"content\":\"%s\"%s%s%s}", e, cur ? ",\"sha\":\"" : "", cur ? cur : "", cur ? "\"" : "");
+            free(e); long st = ghreq("PUT", url, t->tk, body, NULL); free(body);
+            if (st == 200 || st == 201) { ok = 1; break; }
+            if ((st == 409 || st == 422) && at == 0) {          /* 文件在读取之后又变了：刷新 sha 重试一次 */
+                char *tx = NULL, *ns = NULL;
+                if (tgt_get(t, name, &tx, &ns)) { free(tx); free(cur); cur = ns; continue; }
+                free(tx); free(ns);
+            }
+            break;
+        }
+        free(cur);
+        if (ok) return 1;
+        if (!gh_api_down) snprintf(ae, sizeof ae, "%s", ferr);
+        if (git_ok(t)) {                              /* API 写入失败：改用 git 提交并推送 */
+            gh_api_down = 1; setphase("GitHub API 上传失败，改用 git 通道上传");
+            if (git_put(t, name, txt)) return 1;
+            snprintf(ge, sizeof ge, "%s", ferr); snprintf(ferr, sizeof ferr, "API %.180s；git %.180s", ae, ge);
+        }
+        return 0;
+    }
+    char url[1000]; sftp_url(t, name, url, sizeof url);
+    for (int at = 0; at < 2; at++) {
+        Src s = { txt, strlen(txt), 0 }; CURL *cu = sftp_open(url, t->user, t->pw);
+        if (!cu) { snprintf(ferr, sizeof ferr, "curl 初始化失败"); return 0; }
+        curl_easy_setopt(cu, CURLOPT_UPLOAD, 1L); curl_easy_setopt(cu, CURLOPT_READFUNCTION, rcb);
+        curl_easy_setopt(cu, CURLOPT_READDATA, &s); curl_easy_setopt(cu, CURLOPT_INFILESIZE_LARGE, (curl_off_t)s.n);
+        curl_easy_setopt(cu, CURLOPT_FTP_CREATE_MISSING_DIRS, 1L);
+        CURLcode rc = curl_easy_perform(cu); curl_easy_cleanup(cu);
+        if (rc == CURLE_OK) return 1;
+        snprintf(ferr, sizeof ferr, "%s", curl_easy_strerror(rc));
+        if (rc == CURLE_LOGIN_DENIED) return 0;
+        sleep(1);
+    }
+    return 0;
 }
 
-/* ---------- 任务 ---------- */
-static void run_job(const char *c, Item *cand, char *buf) {
-    static char snibuf[1024]; char s[256], pwhy[200], dl_url[300]; int n = 0;
+/* ---------- 单个文件：读取远端 → 复测 → 合并 → 上传 ----------
+ * stage：已合并好、等待上传的内容（上传失败时保留）；manual：用户在「查看」里保存的草稿（.orig 是查看时的远端原文）。
+ * 手动上传时，如果已有 stage（说明自动上传已经复测过远端旧条目），就不再复测，直接合并上传。 */
+static int do_file(const Tgt *t, const Rule *r, int manual, Item *good, int ng, double ml, int mn, int mx, Item *m, int *cursor) {
+    char stp[300], dp[300], op[300], msg[800];
+    spath(stp, sizeof stp, "stage", t->tag, r->name, ""); spath(dp, sizeof dp, "manual", t->tag, r->name, ".txt"); spath(op, sizeof op, "manual", t->tag, r->name, ".orig");
+    char *stage = read_text(stp), *draft = read_text(dp), *orig = read_text(op), *rtext = NULL, *sha = NULL, *txt = NULL;
+    Item *D = calloc(MAXIP, sizeof *D), *B = calloc(MAXIP, sizeof *B), *tru = calloc(MAXIP, sizeof *tru), *rem = calloc(MAXIP, sizeof *rem);
+    int rc = -1, nd = 0, nb = 0, nt = 0, nr = 0, n = 0, staged_mode, retest;
+    if (!D || !B || !tru || !rem) { setphase("内存不足"); goto out; }
+
+    staged_mode = draft ? (!orig && stage != NULL) : (stage != NULL);
+    if (draft) {                                     /* 草稿 = 用户编辑后的完整文本；与查看时的原文比较，得出新增 / 删除 */
+        nd = parse_list(draft, D, MAXIP, 0); nb = parse_list(orig ? orig : stage, B, MAXIP, 0);
+        for (int i = 0; i < nd && nt < MAXIP; i++) {
+            int fresh = !line_in(B, nb, &D[i]);      /* 新增或改过的行：原样保留（含后缀）；没改的行按文件后缀规则 */
+            if (staged_mode || fresh) { tru[nt] = D[i]; tru[nt].keep = fresh; nt++; }
+        }
+    } else if (stage) nt = parse_list(stage, tru, MAXIP, 0);
+
+    retest = !manual || !staged_mode;
+    if (retest || t->kind == 1) {                    /* GitHub 即使不复测也要取一次 sha */
+        setphase(retest ? "读取远端旧文件" : "读取远端文件信息");
+        if (!tgt_get(t, r->name, &rtext, &sha)) {
+            snprintf(msg, sizeof msg, "%s 读取失败：%s。可稍后在结果区点「%s 上传」重试", tgt_name(t), ferr, tgt_name(t)); setphase(msg); goto out;
+        }
+    }
+    if (retest) {
+        nr = parse_list(rtext, rem, MAXIP, 0);
+        if (draft) { int k = 0; for (int i = 0; i < nr; i++) if (line_in(D, nd, &rem[i]) || !line_in(B, nb, &rem[i])) rem[k++] = rem[i]; nr = k; }   /* 去掉用户删除的行 */
+        if (nr) {
+            setphase("复测远端旧条目"); prog(nr); run_pool(rem, nr);
+            int k = 0; for (int i = 0; i < nr; i++) if (pass(&rem[i], ml, mn, mx)) rem[k++] = rem[i];
+            nr = k;
+        }
+    }
+    for (int i = 0; i < nt && n < MAXIP * 2; i++) if (!in_list(m, n, &tru[i])) m[n++] = tru[i];     /* 先放手动 / 待上传的条目 */
+    for (int i = 0; i < ng && nr < MAXIP; i++) {     /* 再并入新筛选结果（用户删掉的除外） */
+        if (draft && in_list(B, nb, &good[i]) && !in_list(D, nd, &good[i])) continue;
+        if (!in_list(rem, nr, &good[i])) rem[nr++] = good[i];
+    }
+    qsort(rem, (size_t)nr, sizeof *rem, cmp);
+    for (int i = 0; i < nr && n < MAXIP * 2; i++) if (!in_list(m, n, &rem[i])) m[n++] = rem[i];
+
+    if (!n) { if (manual) setphase("没有可上传的内容：没有待上传的结果，远端也没有可保留的条目"); rc = 0; goto out; }
+    txt = render(m, n, cursor, r);
+    if (!txt) { setphase("内存不足"); goto out; }
+    write_text(stp, txt); remove(dp); remove(op);    /* 先落盘为“待上传内容”，草稿已并入其中 */
+    setphase(t->kind == 1 ? "上传到 GitHub" : "上传到 SFTP");
+    if (!tgt_put(t, r->name, txt, sha)) {
+        snprintf(msg, sizeof msg, "%s 上传失败：%s。已保留待上传内容，可在结果区点「%s 上传」重试", tgt_name(t), ferr, tgt_name(t)); setphase(msg); goto out;
+    }
+    remove(stp); tgt_link(t, r->name); rc = 1;
+out:
+    free(stage); free(draft); free(orig); free(rtext); free(sha); free(txt); free(D); free(B); free(tru); free(rem);
+    return rc;
+}
+
+/* 返回：0 未填写 / 1 已上传 / 2 完成但有警告 / 3 没有需要上传的内容 / -1 失败（原因在 phase） */
+static int upload_target(const char *c, int kind, Item *good, int ng, double ml, int mn, int mx, int manual) {
+    Tgt t; int ti = tgt_init(&t, kind, c); if (ti <= 0) return ti;
+    gh_api_down = 0; gh_apierr[0] = 0;
+    if (kind == 1) {                                 /* 取默认分支（用于下载链接）；API 不通时若有 git 就改走 git，否则按原因报错 */
+        char url[400], *j = NULL; setphase("连接 GitHub");
+        snprintf(url, sizeof url, "https://api.github.com/repos/%s/%s", t.user, t.repo);
+        long st = ghreq("GET", url, t.tk, NULL, &j);
+        if (st == 200 && j) { char *d = json_dup(j, "default_branch"); if (d && d[0] && safe(d)) snprintf(t.br, sizeof t.br, "%s", d); free(d); }
+        else if (git_ok(&t)) { gh_api_down = 1; snprintf(gh_apierr, sizeof gh_apierr, "%s", st ? "HTTP 状态异常" : ferr); if (st) snprintf(gh_apierr, sizeof gh_apierr, "HTTP %ld", st); }   /* 先用 git，不再白等 API 重试 */
+        else if (st == 401) { free(j); setphase("GitHub 认证失败：请检查 PAT 是否正确、是否过期"); return -1; }
+        else if (st == 404) { free(j); setphase("GitHub 找不到该仓库：请检查用户名、仓库名，以及 PAT 是否有该仓库的权限"); return -1; }
+        free(j);
+    }
+    Item *m = calloc(MAXIP * 2, sizeof *m); if (!m) { setphase("内存不足"); return -1; }
+    int cursor = 0, bad = 0, did = 0; char files[2048], *sp = NULL; snprintf(files, sizeof files, "%s", t.files);
+    for (char *ln = strtok_r(files, "\r\n", &sp); ln; ln = strtok_r(NULL, "\r\n", &sp)) {
+        Rule r; if (!parse_rule(ln, &r)) { bad = 1; continue; }
+        int rc = do_file(&t, &r, manual, good, ng, ml, mn, mx, m, &cursor);
+        if (rc < 0) { free(m); return -1; }
+        if (rc > 0) did++;
+    }
+    free(m);
+    if (bad) { setphase(kind == 1 ? "GitHub 已完成，部分文件名或后缀不合法已跳过（文件名只能含字母数字 . _ -，后缀不能含 |）" : "SFTP 已完成，部分文件名或后缀不合法已跳过（文件名只能含字母数字 . _ -，后缀不能含 |）"); return 2; }
+    return did ? 1 : 3;
+}
+/* 自动上传：GitHub 和 SFTP 各自独立执行，一个失败不影响另一个；失败原因合并显示 */
+static void upload_all(const char *c, Item *good, int ng, double ml, int mn, int mx) {
+    char msg[2][700] = { "", "" }; int any = 0, bad = 0;
+    for (int k = 1; k <= 2; k++) {
+        int r = upload_target(c, k, good, ng, ml, mn, mx, 0);
+        if (r < 0 || r == 2) { pthread_mutex_lock(&mu); snprintf(msg[k - 1], sizeof msg[0], "%s", phase); pthread_mutex_unlock(&mu); bad = 1; }
+        if (r > 0) any = 1;
+    }
+    if (bad) { char o[1500]; snprintf(o, sizeof o, "%s%s%s", msg[0], msg[0][0] && msg[1][0] ? "｜" : "", msg[1]); setphase(o); }
+    else setphase(any ? "全部完成" : "筛选完成：未填写上传信息，仅筛选不上传");
+}
+
+/* ---------- 「查看」与草稿 ---------- */
+static char *view_target(const char *c, int kind, int reset) {   /* 返回 JSON：每个文件的当前内容及来源 */
+    Tgt t; SB b = { 0 }; int ti = tgt_init(&t, kind, c);
+    gh_api_down = 0;
+    if (ti <= 0) {
+        sb_cat(&b, "{\"ok\":0,\"msg\":\"");
+        if (ti == 0) sb_json(&b, kind == 1 ? "请先填写 GitHub 用户名、仓库名、PAT 和文件名" : "请先填写 SFTP 服务器、用户名、密码和文件名");
+        else { pthread_mutex_lock(&mu); sb_json(&b, phase); pthread_mutex_unlock(&mu); }
+        sb_cat(&b, "\"}"); return b.d ? b.d : strdup("{\"ok\":0}");
+    }
+    sb_cat(&b, "{\"ok\":1,\"files\":["); int first = 1; char files[2048], *sp = NULL; snprintf(files, sizeof files, "%s", t.files);
+    for (char *ln = strtok_r(files, "\r\n", &sp); ln; ln = strtok_r(NULL, "\r\n", &sp)) {
+        Rule r; if (!parse_rule(ln, &r)) continue;
+        char dp[300], op[300], stp[300]; spath(dp, sizeof dp, "manual", t.tag, r.name, ".txt"); spath(op, sizeof op, "manual", t.tag, r.name, ".orig"); spath(stp, sizeof stp, "stage", t.tag, r.name, "");
+        if (reset) { remove(dp); remove(op); }
+        char *draft = read_text(dp), *stage = read_text(stp), *rt = NULL, *sha = NULL; const char *src = "remote", *note = "", *show = "";
+        if (draft) { src = "draft"; show = draft; }
+        else if (stage) { src = "staged"; show = stage; remove(op); }
+        else if (tgt_get(&t, r.name, &rt, &sha)) { show = rt ? rt : ""; src = rt ? "remote" : "new"; write_text(op, show); }   /* 记下原文，保存草稿时用来区分新增 / 删除 */
+        else { src = "error"; note = ferr; }
+        if (!first) sb_cat(&b, ",");
+        first = 0;
+        sb_cat(&b, "{\"name\":\""); sb_json(&b, r.name); sb_cat(&b, "\",\"src\":\""); sb_cat(&b, src);
+        sb_cat(&b, "\",\"note\":\""); sb_json(&b, note); sb_cat(&b, "\",\"text\":\""); sb_json(&b, show); sb_cat(&b, "\"}");
+        free(draft); free(stage); free(rt); free(sha);
+    }
+    sb_cat(&b, "]}"); return b.d ? b.d : strdup("{\"ok\":0}");
+}
+static int save_draft(const char *tag, const char *name, const char *text, char *msg, size_t mn) {
+    if ((strcmp(tag, "gh") && strcmp(tag, "sf")) || !safe(name)) { snprintf(msg, mn, "参数不合法"); return 0; }
+    Item *L = calloc(MAXIP, sizeof *L); if (!L) { snprintf(msg, mn, "内存不足"); return 0; }
+    int n = parse_list(text, L, MAXIP, 0), lines = 0;
+    { char *cp = strdup(text), *sp = NULL; for (char *l = cp ? strtok_r(cp, "\r\n", &sp) : NULL; l; l = strtok_r(NULL, "\r\n", &sp)) { while (isspace((unsigned char)*l)) l++; if (*l) lines++; } free(cp); }
+    SB o = { 0 };
+    for (int i = 0; i < n; i++) { char e[330]; L[i].keep = 1; fmt_entry(&L[i], "", e, sizeof e); sb_cat(&o, e); sb_cat(&o, "\n"); }   /* 规范化后保存 */
+    free(L);
+    char dp[300], op[300], stp[300]; spath(dp, sizeof dp, "manual", tag, name, ".txt"); spath(op, sizeof op, "manual", tag, name, ".orig"); spath(stp, sizeof stp, "stage", tag, name, "");
+    char *stage = read_text(stp);
+    if (stage) remove(op); else if (access(op, R_OK)) write_text(op, "");      /* 没有原文时按“全部是新增”处理 */
+    free(stage);
+    int rc = write_text(dp, o.d ? o.d : ""); free(o.d);
+    if (rc) { snprintf(msg, mn, "保存失败：无法写入本地文件"); return 0; }
+    snprintf(msg, mn, lines > n ? "已保存 %d 行草稿（另有 %d 行重复或无法识别，已忽略）" : "已保存 %d 行草稿", n, lines - n);
+    return 1;
+}
+
+/* ---------- 最近一次筛选结果（供手动上传使用，重启后仍在）与参数解析 ---------- */
+static void save_results(void) {
+    pthread_mutex_lock(&mu);
+    FILE *f = fopen("data/last_results.txt.tmp", "w");
+    if (f) {
+        for (int i = 0; i < nres; i++) fprintf(f, "%s %d %d %d %d %.3f %.3f\n", res[i].host, res[i].port, res[i].dom, res[i].ok, res[i].tries, res[i].ms, res[i].mbps);
+        if (fclose(f) == 0) rename("data/last_results.txt.tmp", "data/last_results.txt");
+    }
+    pthread_mutex_unlock(&mu);
+}
+static int load_results(Item *out, int cap) {
+    FILE *f = fopen("data/last_results.txt", "r"); if (!f) return 0;
+    int n = 0;
+    while (n < cap) {
+        Item t; memset(&t, 0, sizeof t);
+        if (fscanf(f, "%127s %d %d %d %d %lf %lf", t.host, &t.port, &t.dom, &t.ok, &t.tries, &t.ms, &t.mbps) != 7) break;
+        if (t.port < 1 || t.port > 65535 || t.tries < 1) continue;
+        out[n++] = t;
+    }
+    fclose(f); return n;
+}
+static char snibuf[1024];
+static void parse_params(const char *c, double *maxloss, int *minms, int *maxms) {   /* 测速 / 复测共用的参数 */
+    char s[64];
     P.port = form_int(c, "port", 443, 1, 65535); P.timeout = form_int(c, "timeout", 1500, 200, 10000);
     P.tries = form_int(c, "tries", 3, 1, 10); P.threads = form_int(c, "threads", 16, 1, 64);
     form_get(c, "sni", snibuf, sizeof snibuf); P.nsni = 0;
     { char *sp = NULL; for (char *t = strtok_r(snibuf, "\r\n ,;\t", &sp); t && P.nsni < 8; t = strtok_r(NULL, "\r\n ,;\t", &sp)) if (host_ok(t)) P.sni[P.nsni++] = t; }
+    *minms = form_int(c, "minms", 0, 0, 9999); *maxms = form_int(c, "maxms", 9999, 1, 9999);
+    form_get(c, "loss", s, sizeof s); *maxloss = s[0] ? atof(s) : 1.0;
+}
+static int count_pending(int kind) {                 /* 有多少个文件还有待上传内容（用于按钮提示） */
+    char files[2048], *sp = NULL; int n = 0;
+    pthread_mutex_lock(&mu); form_get(cfg, kind == 1 ? "gh_files" : "sf_files", files, sizeof files); pthread_mutex_unlock(&mu);
+    for (char *ln = strtok_r(files, "\r\n", &sp); ln; ln = strtok_r(NULL, "\r\n", &sp)) {
+        Rule r; char p[300]; if (!parse_rule(ln, &r)) continue;
+        spath(p, sizeof p, "stage", kind == 1 ? "gh" : "sf", r.name, ""); if (!access(p, R_OK)) n++;
+    }
+    return n;
+}
+
+/* ---------- 任务 ---------- */
+static void run_job(const char *c, Item *cand, char *buf) {
+    char s[256], pwhy[200], dl_url[300]; int n = 0, minms, maxms; double maxloss;
+    parse_params(c, &maxloss, &minms, &maxms);
     int samples = form_int(c, "samples", 3, 1, 20), nseg = form_int(c, "nseg", 10, 0, 500), ndom = form_int(c, "ndom", 20, 0, 500);
-    int want = form_int(c, "count", 10, 1, 500), minms = form_int(c, "minms", 0, 0, 9999), maxms = form_int(c, "maxms", 9999, 1, 9999);
-    form_get(c, "loss", s, sizeof s); double maxloss = s[0] ? atof(s) : 1.0;
+    int want = form_int(c, "count", 10, 1, 500);
     int dl_on = form_int(c, "dl_on", 0, 0, 1); DL.secs = form_int(c, "dl_secs", 6, 2, 30);
     form_get(c, "dl_min", s, sizeof s); double dl_min = s[0] ? atof(s) : 0;
     form_get(c, "dl_url", dl_url, sizeof dl_url);
@@ -686,6 +1035,7 @@ static void run_job(const char *c, Item *cand, char *buf) {
     if (res) { memcpy(res, cand, sizeof(Item) * (size_t)g); nres = g; } else nres = 0;
     pthread_mutex_unlock(&mu);
 
+    if (g) save_results();                            /* 供手动上传使用，重启后仍在 */
     if (!g) {
         char m[480];
         snprintf(m, sizeof m, "没有符合条件的结果：候选 %d 个，TLS 握手成功 %d 个；失败原因 超时 %d / 证书 %d / 连接 %d / 其他 %d。%s", n, hs, e_to, e_cert, e_conn, e_oth,
@@ -716,6 +1066,37 @@ static int start_job(const char *body) {              /* 0 已启动 / 1 正忙 
     char *copy = strdup(body); pthread_t th;
     if (!copy || pthread_create(&th, NULL, job, copy)) { free(copy); pthread_mutex_lock(&mu); running = 0; pthread_mutex_unlock(&mu); return 2; }
     pthread_detach(th); mark_run(); return 0;
+}
+typedef struct { char *c; int kind; } Mj;
+static void *manual_job(void *arg) {                 /* 手动上传：继续上次未完成的上传，或把最近一次结果上传一遍 */
+    Mj *j = arg; Item *good = calloc(MAXIP, sizeof *good); int ng = good ? load_results(good, MAXIP) : 0, r = -1, minms, maxms; double maxloss;
+    parse_params(j->c, &maxloss, &minms, &maxms);
+    e_to = e_cert = e_conn = e_oth = 0;
+    pthread_mutex_lock(&mu);
+    if (nres == 0 && ng > 0 && !res) { int k = ng < 500 ? ng : 500; res = malloc(sizeof(Item) * (size_t)k); if (res) { memcpy(res, good, sizeof(Item) * (size_t)k); nres = k; } }
+    pthread_mutex_unlock(&mu);
+    setphase(j->kind == 1 ? "GitHub 手动上传中" : "SFTP 手动上传中");
+    if (!good) setphase("内存不足");
+    else {
+        r = upload_target(j->c, j->kind, good, ng, maxloss, minms, maxms, 1);
+        if (r == 0) setphase(j->kind == 1 ? "未填写完整的 GitHub 上传信息" : "未填写完整的 SFTP 上传信息");
+        else if (r == 1) setphase(j->kind == 1 ? "GitHub 手动上传完成" : "SFTP 手动上传完成");
+    }
+    char msg[8192]; summary(msg, sizeof msg); notify(j->c, msg);
+    free(good); free(j->c); free(j);
+    pthread_mutex_lock(&mu); running = 0; pthread_mutex_unlock(&mu);
+    return NULL;
+}
+static int start_manual(const char *body, int kind) {   /* 0 已启动 / 1 正忙 / 2 失败 */
+    pthread_mutex_lock(&mu); int busy = running; if (!busy) running = 1; pthread_mutex_unlock(&mu);
+    if (busy) return 1;
+    Mj *j = malloc(sizeof *j); pthread_t th;
+    if (j) { j->c = strdup(body); j->kind = kind; }
+    if (!j || !j->c || pthread_create(&th, NULL, manual_job, j)) {
+        if (j) { free(j->c); free(j); }
+        pthread_mutex_lock(&mu); running = 0; pthread_mutex_unlock(&mu); return 2;
+    }
+    pthread_detach(th); return 0;
 }
 static void *scheduler(void *a) {                     /* 每 30 秒检查：固定间隔（小时）或每周某天某时 */
     (void)a;
@@ -823,6 +1204,7 @@ static void handle(int fd) {
         }
         if (hb && (long)n >= need) break;
     }
+    if (hb && (long)n < need) { RS(fd, 413, "text/plain", "请求内容过大或不完整"); free(rq); return; }
     char m[8] = "", p[1024] = "";
     if (!hb || sscanf(rq, "%7s %1023s", m, p) != 2) { free(rq); return; }
 
@@ -836,10 +1218,11 @@ static void handle(int fd) {
             fclose(f);
         }
     } else if (!strncmp(p, "/api/status", 11)) {
-        char *o = malloc(80000), ph[1000], lk[4096], nt[500];
+        char *o = malloc(80000), ph[3200], lk[4096], nt[500];
         if (o) {
+            int pg = count_pending(1), ps = count_pending(2);
             pthread_mutex_lock(&mu); jesc(ph, sizeof ph, phase); jesc(lk, sizeof lk, links); jesc(nt, sizeof nt, notes);
-            int len = snprintf(o, 80000, "{\"running\":%d,\"phase\":\"%s\",\"done\":%d,\"total\":%d,\"links\":\"%s\",\"note\":\"%s\",\"items\":[", running, ph, done, total, lk, nt);
+            int len = snprintf(o, 80000, "{\"running\":%d,\"phase\":\"%s\",\"done\":%d,\"total\":%d,\"links\":\"%s\",\"note\":\"%s\",\"pend_gh\":%d,\"pend_sf\":%d,\"items\":[", running, ph, done, total, lk, nt, pg, ps);
             for (int i = 0; i < nres && len < 78000; i++) {
                 char e[330]; fmt_entry(&res[i], "", e, sizeof e);
                 len += snprintf(o + len, 80000 - (size_t)len, "%s{\"ip\":\"%s\",\"ms\":%.1f,\"loss\":%.2f,\"mbps\":%.2f}", i ? "," : "", e, res[i].ms, 1.0 - (double)res[i].ok / res[i].tries, res[i].mbps);
@@ -888,6 +1271,26 @@ static void handle(int fd) {
         pthread_mutex_lock(&mu); char *cc = strdup(cfg); pthread_mutex_unlock(&mu);
         int r = cc ? notify(cc, "🔔 CF 优选：测试通知，通道已连通") : 0; free(cc);
         RS(fd, 200, "text/plain", r ? "测试通知已发送，请查看 Telegram / 邮箱" : "没有发送成功：请检查 Token、Chat ID 或 SMTP 设置");
+    } else if (!strcmp(m, "POST") && !strncmp(p, "/api/upload", 11)) {                 /* 手动上传 */
+        char t[8]; const char *qs = strchr(p, '?'); form_get(qs ? qs + 1 : "", "t", t, sizeof t);
+        int kind = !strcmp(t, "gh") ? 1 : !strcmp(t, "sf") ? 2 : 0;
+        if (!kind) RS(fd, 400, "text/plain", "bad target");
+        else { save_cfg(hb); int r = start_manual(hb, kind); RS(fd, r == 1 ? 409 : r ? 500 : 200, "text/plain", r == 1 ? "busy" : r ? "failed" : "started"); }
+    } else if (!strcmp(m, "POST") && !strncmp(p, "/api/view_save", 14)) {              /* 保存「查看」里的草稿 */
+        char t[8], name[100], msg[240], jm[500], o[600]; int ok = 0, busy; form_get(hb, "t", t, sizeof t); form_get(hb, "name", name, sizeof name);
+        char *text = malloc(strlen(hb) + 1);
+        pthread_mutex_lock(&mu); busy = running; pthread_mutex_unlock(&mu);
+        if (busy) snprintf(msg, sizeof msg, "任务运行中，请稍后再保存");
+        else if (!text) snprintf(msg, sizeof msg, "内存不足");
+        else { form_get(hb, "text", text, strlen(hb) + 1); ok = save_draft(t, name, text, msg, sizeof msg); }
+        free(text); jesc(jm, sizeof jm, msg); snprintf(o, sizeof o, "{\"ok\":%d,\"msg\":\"%s\"}", ok, jm); RS(fd, 200, "application/json", o);
+    } else if (!strcmp(m, "POST") && !strncmp(p, "/api/view", 9)) {                    /* 查看远端 / 待上传内容 */
+        char t[8]; const char *qs = strchr(p, '?'); form_get(qs ? qs + 1 : "", "t", t, sizeof t);
+        int kind = !strcmp(t, "gh") ? 1 : !strcmp(t, "sf") ? 2 : 0, busy;
+        pthread_mutex_lock(&mu); busy = running; pthread_mutex_unlock(&mu);
+        if (!kind) RS(fd, 400, "text/plain", "bad target");
+        else if (busy) RS(fd, 200, "application/json", "{\"ok\":0,\"msg\":\"任务运行中，请等当前任务结束后再查看\"}");
+        else { save_cfg(hb); char *j = view_target(hb, kind, form_int(hb, "reset", 0, 0, 1)); RS(fd, 200, "application/json", j); free(j); }
     } else RS(fd, 404, "text/plain", "not found");
     free(rq);
 }
@@ -919,10 +1322,10 @@ int main(int argc, char **argv) {
     if (!getcwd(wd, sizeof wd)) wd[0] = 0;
     if (as) { puts(autostart()); return 0; }
 
-    signal(SIGPIPE, SIG_IGN); umask(077);
+    signal(SIGPIPE, SIG_IGN); umask(077); setenv("GIT_TERMINAL_PROMPT", "0", 1);
     rs ^= (uint64_t)time(NULL) * 2654435761u;
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) { fputs("libcurl 初始化失败\n", stderr); return 1; }
-    mkdir("data", 0700);
+    mkdir("data", 0700); mkdir("data/stage", 0700); mkdir("data/manual", 0700);
     FILE *f = fopen("data/config.txt", "r"); if (f) { size_t r = fread(cfg, 1, sizeof cfg - 1, f); cfg[r] = 0; fclose(f); }
     if ((f = fopen("data/secrets.txt", "r"))) { size_t r = fread(secrets, 1, sizeof secrets - 1, f); secrets[r] = 0; fclose(f); }
     if ((f = fopen("data/last_run.txt", "r"))) { long t = 0; if (fscanf(f, "%ld", &t) == 1) last_run = (time_t)t; fclose(f); }
